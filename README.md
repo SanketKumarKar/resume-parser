@@ -33,6 +33,7 @@ cp backend/.env.example backend/.env
 ```
 
 Then open `backend/.env` and fill in your key:
+
 ```env
 GEMINI_API_KEY=your_gemini_api_key_here
 PORT=5000
@@ -45,12 +46,14 @@ PORT=5000
 Open **two terminals**:
 
 **Terminal 1 — Backend:**
+
 ```bash
 npm run dev:backend
 # Runs on http://localhost:5000
 ```
 
 **Terminal 2 — Frontend:**
+
 ```bash
 npm run start:frontend
 # Runs on http://localhost:3000
@@ -92,19 +95,19 @@ resume-extractor/
 
 ## 📋 Supported File Formats
 
-| Format | Extension | Method |
-|--------|-----------|--------|
-| PDF | `.pdf` | Gemini native vision (inline base64) |
-| Word 2007+ | `.docx` | mammoth |
-| Word 97-2003 | `.doc` | mammoth |
-| Rich Text | `.rtf` | regex strip |
-| Plain Text | `.txt` | direct read |
-| HTML | `.html`, `.htm` | node-html-parser |
-| OpenDocument | `.odt` | unzipper + XML parse |
-| Markdown | `.md`, `.markdown` | direct read |
-| **JPEG Image** | `.jpg`, `.jpeg` | **Gemini vision (inline base64)** |
-| **PNG Image** | `.png` | **Gemini vision (inline base64)** |
-| **WebP Image** | `.webp` | **Gemini vision (inline base64)** |
+| Format               | Extension              | Method                                  |
+| -------------------- | ---------------------- | --------------------------------------- |
+| PDF                  | `.pdf`               | Gemini native vision (inline base64)    |
+| Word 2007+           | `.docx`              | mammoth                                 |
+| Word 97-2003         | `.doc`               | mammoth                                 |
+| Rich Text            | `.rtf`               | regex strip                             |
+| Plain Text           | `.txt`               | direct read                             |
+| HTML                 | `.html`, `.htm`    | node-html-parser                        |
+| OpenDocument         | `.odt`               | unzipper + XML parse                    |
+| Markdown             | `.md`, `.markdown` | direct read                             |
+| **JPEG Image** | `.jpg`, `.jpeg`    | **Gemini vision (inline base64)** |
+| **PNG Image**  | `.png`               | **Gemini vision (inline base64)** |
+| **WebP Image** | `.webp`              | **Gemini vision (inline base64)** |
 
 ---
 
@@ -145,16 +148,19 @@ resume-extractor/
 ### `POST /api/extract`
 
 **Headers:**
+
 ```
 Content-Type: multipart/form-data
 ```
 
 **Body (form-data):**
+
 ```
 resume: <file>
 ```
 
 **Response:**
+
 ```json
 {
   "success": true,
@@ -167,15 +173,15 @@ resume: <file>
 
 ## 🛠️ Tech Stack
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | React 18, Vite, react-dropzone |
-| Backend | Node.js, Express |
-| AI Model | Google Gemini 3 Flash Preview |
-| PDF / Image Parsing | Gemini inline vision (base64) |
-| DOCX/DOC | mammoth |
-| HTML | node-html-parser |
-| ODT | unzipper |
+| Layer               | Technology                     |
+| ------------------- | ------------------------------ |
+| Frontend            | React 18, Vite, react-dropzone |
+| Backend             | Node.js, Express               |
+| AI Model            | Google Gemini 3 Flash Preview  |
+| PDF / Image Parsing | Gemini inline vision (base64)  |
+| DOCX/DOC            | mammoth                        |
+| HTML                | node-html-parser               |
+| ODT                 | unzipper                       |
 
 ---
 
