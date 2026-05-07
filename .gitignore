@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Environment variables — never commit your real API keys
+backend/.env
+
+# Build output
+frontend/dist/
+
+# Temp uploads
+backend/tmp/
+
+# Editor / OS files
+.DS_Store
+Thumbs.db
+.vscode/
+*.log
