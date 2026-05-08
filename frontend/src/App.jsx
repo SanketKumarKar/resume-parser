@@ -9,6 +9,7 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const handleExtract = async () => {
     if (!file) return setError("Please upload a resume file.");
@@ -44,6 +45,120 @@ export default function App() {
     setFile(null);
     setResult(null);
     setError("");
+  };
+
+  const handleDownloadPDF = async () => {
+    if (!result) return;
+
+    setIsDownloading(true);
+    try {
+      const response = await axios.post(
+        "/api/download",
+        {
+          resumeData: result,
+          filename: file?.name || "resume",
+          format: "pdf",
+        },
+        {
+          responseType: "blob",
+          timeout: 30000,
+        }
+      );
+
+      // Create a blob URL and trigger download
+      const blobUrl = window.URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = `${(file?.name || "resume").split(".")[0]}_formatted.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      const msg =
+        err.response?.data?.error ||
+        err.message ||
+        "Failed to download resume. Please try again.";
+      setError(msg);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
+  const handleDownloadDocx = async () => {
+    if (!result) return;
+
+    setIsDownloading(true);
+    try {
+      const response = await axios.post(
+        "/api/download",
+        {
+          resumeData: result,
+          filename: file?.name || "resume",
+          format: "docx",
+        },
+        {
+          responseType: "blob",
+          timeout: 30000,
+        }
+      );
+
+      // Create a blob URL and trigger download
+      const blobUrl = window.URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = `${(file?.name || "resume").split(".")[0]}_formatted.docx`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      const msg =
+        err.response?.data?.error ||
+        err.message ||
+        "Failed to download resume. Please try again.";
+      setError(msg);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
+  const handleDownloadHTML = async () => {
+    if (!result) return;
+
+    setIsDownloading(true);
+    try {
+      const response = await axios.post(
+        "/api/download",
+        {
+          resumeData: result,
+          filename: file?.name || "resume",
+          format: "html",
+        },
+        {
+          responseType: "blob",
+          timeout: 30000,
+        }
+      );
+
+      // Create a blob URL and trigger download
+      const blobUrl = window.URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = `${(file?.name || "resume").split(".")[0]}_formatted.html`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      const msg =
+        err.response?.data?.error ||
+        err.message ||
+        "Failed to download resume. Please try again.";
+      setError(msg);
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   return (
@@ -341,29 +456,115 @@ export default function App() {
                   Extracted Resume Data
                 </h2>
               </div>
-              <button
-                onClick={handleReset}
-                style={{
-                  padding: "10px 20px",
-                  background: "var(--bg-elevated)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-sm)",
-                  color: "var(--text-secondary)",
-                  fontSize: 13,
-                  fontWeight: 500,
-                  transition: "all 0.2s ease",
-                }}
-                onMouseEnter={(e) => {
-                  e.target.style.borderColor = "var(--accent)";
-                  e.target.style.color = "var(--accent)";
-                }}
-                onMouseLeave={(e) => {
-                  e.target.style.borderColor = "var(--border)";
-                  e.target.style.color = "var(--text-secondary)";
-                }}
-              >
-                ← Extract Another
-              </button>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                <button
+                  onClick={handleDownloadPDF}
+                  disabled={isDownloading}
+                  style={{
+                    padding: "10px 20px",
+                    background: "linear-gradient(135deg, var(--accent), #a855f7)",
+                    border: "none",
+                    borderRadius: "var(--radius-sm)",
+                    color: "white",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    transition: "all 0.2s ease",
+                    cursor: isDownloading ? "not-allowed" : "pointer",
+                    opacity: isDownloading ? 0.7 : 1,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isDownloading) {
+                      e.target.style.transform = "translateY(-1px)";
+                      e.target.style.boxShadow = "0 4px 16px var(--accent-glow)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.target.style.transform = "translateY(0)";
+                    e.target.style.boxShadow = "none";
+                  }}
+                >
+                  {isDownloading ? "🔄 Generating..." : "⬇️ Download PDF"}
+                </button>
+                <button
+                  onClick={handleDownloadHTML}
+                  disabled={isDownloading}
+                  style={{
+                    padding: "10px 20px",
+                    background: "var(--bg-elevated)",
+                    border: "1px solid var(--accent)",
+                    borderRadius: "var(--radius-sm)",
+                    color: "var(--accent)",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    transition: "all 0.2s ease",
+                    cursor: isDownloading ? "not-allowed" : "pointer",
+                    opacity: isDownloading ? 0.7 : 1,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isDownloading) {
+                      e.target.style.transform = "translateY(-1px)";
+                      e.target.style.background = "var(--accent-dim)";
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    e.target.style.transform = "translateY(0)";
+                    e.target.style.background = "var(--bg-elevated)";
+                  }}
+                >
+                  📄 Download HTML
+                </button>
+                  <button
+                    onClick={handleDownloadDocx}
+                    disabled={isDownloading}
+                    style={{
+                      padding: "10px 20px",
+                      background: "var(--bg-elevated)",
+                      border: "1px solid #0066cc",
+                      borderRadius: "var(--radius-sm)",
+                      color: "#0066cc",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      transition: "all 0.2s ease",
+                      cursor: isDownloading ? "not-allowed" : "pointer",
+                      opacity: isDownloading ? 0.7 : 1,
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isDownloading) {
+                        e.target.style.transform = "translateY(-1px)";
+                        e.target.style.background = "rgba(0, 102, 204, 0.08)";
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      e.target.style.transform = "translateY(0)";
+                      e.target.style.background = "var(--bg-elevated)";
+                    }}
+                  >
+                    📝 Download DOCX
+                  </button>
+                <button
+                  onClick={handleReset}
+                  style={{
+                    padding: "10px 20px",
+                    background: "var(--bg-elevated)",
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--radius-sm)",
+                    color: "var(--text-secondary)",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    transition: "all 0.2s ease",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.target.style.borderColor = "var(--accent)";
+                    e.target.style.color = "var(--accent)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.target.style.borderColor = "var(--border)";
+                    e.target.style.color = "var(--text-secondary)";
+                  }}
+                >
+                  ← Extract Another
+                </button>
+              </div>
             </div>
 
             <JsonViewer data={result} />

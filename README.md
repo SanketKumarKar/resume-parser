@@ -171,6 +171,41 @@ resume: <file>
 
 ---
 
+## ⬇️ Download / Export Resume
+
+After extraction you can convert the parsed JSON into a clean, ATS-friendly resume and download it in three formats: `pdf` (ATS-friendly), `docx` (editable Word), and `html` (web-friendly).
+
+### `POST /api/download`
+
+Request body (application/json):
+
+```json
+{
+  "resumeData": { /* extracted JSON from /api/extract */ },
+  "filename": "john_doe_resume",
+  "format": "pdf" // or "docx" or "html"
+}
+```
+
+Response:
+- `pdf`: returns an ATS-optimized PDF (Content-Type: application/pdf)
+- `docx`: returns an editable Microsoft Word file (Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document)
+- `html`: returns an HTML file (Content-Type: text/html)
+
+### Example (client-side Axios)
+
+```javascript
+// Download PDF
+const resp = await axios.post('/api/download', { resumeData, filename: 'me', format: 'pdf' }, { responseType: 'blob' });
+// then createObjectURL + anchor click to save
+```
+
+### ATS Notes
+- The default PDF renderer produces a plain, black-on-white layout using standard fonts and single-column structure to maximize compatibility with Applicant Tracking Systems (ATS).
+- Best practice: send the `pdf` for online job portals and `docx` when a recruiter requests an editable file.
+
+---
+
 ## 🛠️ Tech Stack
 
 | Layer               | Technology                     |
@@ -190,3 +225,71 @@ resume: <file>
 - Files are processed in memory and immediately deleted after extraction
 - API keys are read from `.env` and never exposed to the client
 - No data is logged or persisted
+
+---
+
+## ⬇️ Download Feature — Details
+
+This project can convert extracted JSON into clean, ATS-friendly resumes and downloadable files in `pdf`, `docx`, and `html` formats. Key behaviors and usage notes:
+
+- Supported formats: `pdf` (ATS-friendly), `docx` (editable Word), `html` (web-friendly)
+- Endpoint: `POST /api/download` accepts `{ resumeData, filename, format }` and returns a binary file.
+- Browser client: use `responseType: 'blob'` and createObjectURL + anchor click to save the file.
+- PDF generation uses `pdfkit` and produces single-column, text-first PDFs optimized for parsing by ATS.
+
+### Quick Download Example (client-side Axios)
+
+```javascript
+const resp = await axios.post('/api/download', { resumeData, filename: 'me', format: 'pdf' }, { responseType: 'blob' });
+// then createObjectURL + anchor click to save
+```
+
+### Response Headers (examples)
+
+- PDF: `Content-Type: application/pdf`, `Content-Disposition: attachment; filename="<name>_formatted.pdf"`
+- DOCX: `Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document`
+- HTML: `Content-Type: text/html; charset=utf-8`
+
+## ATS Guidance (summary)
+
+To maximize parsing accuracy when submitting resumes to Applicant Tracking Systems, follow these rules:
+
+- Use standard fonts (Arial, Helvetica, Times New Roman)
+- Keep single-column layout; avoid tables or multi-column designs
+- Use black text on white background; avoid images and graphics
+- Use clear section headers (EXPERIENCE, EDUCATION, SKILLS, etc.)
+- Use plain bullet points and include dates for each job/education entry
+- Keep margins standard (approx. 0.5 in) and limit to 1–2 pages
+
+These rules are the default target for the `pdf` renderer in this project.
+
+## Setup & Troubleshooting (concise)
+
+1. Install backend deps:
+
+```bash
+cd backend
+npm install
+```
+
+2. Start backend (dev):
+
+```bash
+npm run dev
+```
+
+3. Start frontend (dev):
+
+```bash
+cd frontend
+npm run dev
+```
+
+Common troubleshooting:
+- If port 5000 is in use, free it or update `backend/.env` `PORT` value.
+- Ensure `pdfkit` is installed for PDF generation: `npm list pdfkit`.
+- If a download appears blank, verify `resumeData` from `/api/extract` before calling `/api/download`.
+
+---
+
+If you want these full, separate guides restored later, I can keep them in a docs/ folder instead of the repo root.

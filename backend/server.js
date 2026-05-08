@@ -7,6 +7,10 @@ import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import { extractTextFromFile } from "./fileParser.js";
 import { extractResumeData } from "./geminiService.js";
+import { extractLocalData } from "./localParser.js";
+import { generateResumePDF } from "./resumeDownloadService.js";
+import { generateResumeHTML } from "./resumeHtmlTemplate.js";
+import { generateResumeDocx } from "./resumeDocxTemplate.js";
 
 dotenv.config();
 
@@ -95,21 +99,38 @@ app.post("/api/extract", upload.single("resume"), async (req, res) => {
       return res.status(422).json({ error: "Could not extract text or image from file." });
     }
 
-    // Step 2: Send to Gemini
-    const resumeData = await extractResumeData(
-      apiKey,
-      text,
-      isPdf,
-      isImage,
-      mimetype,
-      filePath,
-      originalname
-    );
+    // Step 2: Send to Gemini (with Local Fallback)
+    let resumeData;
+    let usedFallback = false;
+
+    try {
+      resumeData = await extractResumeData(
+        apiKey,
+        text,
+        isPdf,
+        isImage,
+        mimetype,
+        filePath,
+        originalname
+      );
+    } catch (apiError) {
+      console.warn("⚠️ Gemini API failed, falling back to local parsing:", apiError.message);
+      
+      // Local fallback only works if we have text
+      if (text) {
+        resumeData = extractLocalData(text);
+        usedFallback = true;
+      } else {
+        // If it was a pure image/PDF and Gemini failed, we might have no text
+        throw new Error(`API failed and no local text available for fallback: ${apiError.message}`);
+      }
+    }
 
     res.json({
       success: true,
       filename: originalname,
       data: resumeData,
+      fallback: usedFallback,
     });
   } catch (err) {
     console.error("Extraction error:", err);
@@ -121,6 +142,60 @@ app.post("/api/extract", upload.single("resume"), async (req, res) => {
     if (filePath && fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
+  }
+});
+
+// Download resume as PDF endpoint
+app.post("/api/download", express.json(), async (req, res) => {
+  try {
+    const { resumeData, filename, format = "pdf" } = req.body;
+
+    if (!resumeData) {
+      return res
+        .status(400)
+        .json({ error: "Resume data is required. Please extract a resume first." });
+    }
+
+    const sanitizedFilename = (filename || "resume")
+      .replace(/[^a-z0-9]/gi, "_")
+      .toLowerCase();
+
+    if (format === "docx") {
+      // Generate DOCX
+      const docxBuffer = await generateResumeDocx(resumeData);
+
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${sanitizedFilename}_formatted.docx"`
+      );
+
+      res.send(docxBuffer);
+    } else if (format === "html") {
+      // Generate HTML
+      const htmlContent = generateResumeHTML(resumeData);
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${sanitizedFilename}_formatted.html"`
+      );
+
+      res.send(htmlContent);
+    } else {
+      // Generate PDF (default)
+      const pdfDoc = generateResumePDF(resumeData);
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="${sanitizedFilename}_formatted.pdf"`);
+
+      pdfDoc.pipe(res);
+    }
+  } catch (err) {
+    console.error("Download error:", err);
+    res.status(500).json({
+      error: err.message || "Failed to generate resume.",
+    });
   }
 });
 
