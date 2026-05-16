@@ -8,6 +8,7 @@ import dotenv from "dotenv";
 import { extractTextFromFile } from "./fileParser.js";
 import { extractResumeData } from "./geminiService.js";
 import { extractLocalData } from "./localParser.js";
+import { canonicalizeResumeData } from "./resumeCanonicalizer.js";
 import { generateResumePDF } from "./resumeDownloadService.js";
 import { generateResumeHTML } from "./resumeHtmlTemplate.js";
 import { generateResumeDocx } from "./resumeDocxTemplate.js";
@@ -41,9 +42,10 @@ const upload = multer({
       "image/jpeg",
       "image/png",
       "image/webp",
+      "image/svg+xml",
     ];
     const allowedExts = [
-      ".pdf", ".docx", ".doc", ".rtf", ".txt", ".html", ".htm", ".odt", ".md", ".markdown", ".jpg", ".jpeg", ".png", ".webp"
+      ".pdf", ".docx", ".doc", ".rtf", ".txt", ".html", ".htm", ".odt", ".md", ".markdown", ".jpg", ".jpeg", ".png", ".webp", ".svg"
     ];
     const ext = path.extname(file.originalname).toLowerCase();
 
@@ -52,7 +54,7 @@ const upload = multer({
     } else {
       cb(
         new Error(
-          `Unsupported file type: ${ext}. Supported: PDF, DOCX, DOC, RTF, TXT, HTML, ODT, MD, JPG, PNG, WEBP`
+          `Unsupported file type: ${ext}. Supported: PDF, DOCX, DOC, RTF, TXT, HTML, ODT, MD, JPG, PNG, WEBP, SVG`
         )
       );
     }
@@ -80,16 +82,11 @@ app.post("/api/extract", upload.single("resume"), async (req, res) => {
     }
 
     const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return res.status(400).json({
-        error: "Gemini API key is missing. Provide it in the request header x-api-key or in .env",
-      });
-    }
 
     const { originalname, mimetype } = req.file;
 
     // Step 1: Extract text from file
-    const { text, isPdf, isImage, buffer } = await extractTextFromFile(
+    const { text, isPdf, isImage, sourceType, warnings = [] } = await extractTextFromFile(
       filePath,
       mimetype,
       originalname
@@ -118,7 +115,7 @@ app.post("/api/extract", upload.single("resume"), async (req, res) => {
       
       // Local fallback only works if we have text
       if (text) {
-        resumeData = extractLocalData(text);
+        resumeData = canonicalizeResumeData(extractLocalData(text));
         usedFallback = true;
       } else {
         // If it was a pure image/PDF and Gemini failed, we might have no text
@@ -131,6 +128,9 @@ app.post("/api/extract", upload.single("resume"), async (req, res) => {
       filename: originalname,
       data: resumeData,
       fallback: usedFallback,
+      sourceType,
+      textLength: text ? text.length : 0,
+      warnings,
     });
   } catch (err) {
     console.error("Extraction error:", err);

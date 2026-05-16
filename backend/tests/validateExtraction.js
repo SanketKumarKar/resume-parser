@@ -70,7 +70,7 @@ function parseArgs() {
 // ─── File Discovery ──────────────────────────────────────────────────────────
 const SUPPORTED_EXTS = new Set([
   ".pdf", ".docx", ".doc", ".rtf", ".txt", ".html", ".htm",
-  ".odt", ".md", ".markdown", ".jpg", ".jpeg", ".png", ".webp",
+  ".odt", ".md", ".markdown", ".jpg", ".jpeg", ".png", ".webp", ".svg",
 ]);
 
 function discoverFiles(dir) {

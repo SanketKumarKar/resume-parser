@@ -14,6 +14,7 @@ const ACCEPTED_TYPES = {
   "image/jpeg": [".jpg", ".jpeg"],
   "image/png": [".png"],
   "image/webp": [".webp"],
+  "image/svg+xml": [".svg"],
 };
 
 const FORMAT_ICONS = {
@@ -40,7 +41,7 @@ export default function FileUploader({ onFileSelect, selectedFile, isLoading }) 
     (acceptedFiles, rejectedFiles) => {
       setDragError("");
       if (rejectedFiles.length > 0) {
-        setDragError(`Unsupported format. Please upload: PDF, DOCX, DOC, RTF, TXT, HTML, ODT, MD, JPG, PNG, or WEBP`);
+        setDragError(`Unsupported format. Please upload: PDF, DOCX, DOC, RTF, TXT, HTML, ODT, MD, JPG, PNG, WEBP, or SVG`);
         return;
       }
       if (acceptedFiles.length > 0) {
@@ -135,7 +136,7 @@ export default function FileUploader({ onFileSelect, selectedFile, isLoading }) 
               {isDragActive ? "Drop your resume here" : "Drop your resume or click to upload"}
             </div>
             <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>
-              Supports PDF, DOCX, DOC, RTF, TXT, HTML, ODT, MD, JPG, PNG, WEBP
+              Supports PDF, DOCX, DOC, RTF, TXT, HTML, ODT, MD, JPG, PNG, WEBP, SVG
             </div>
             <div style={{ color: "var(--text-muted)", fontSize: 12, marginTop: 4 }}>
               Max file size: 10MB
@@ -162,7 +163,7 @@ export default function FileUploader({ onFileSelect, selectedFile, isLoading }) 
 
       {/* Supported formats pills */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 16 }}>
-        {["PDF", "DOCX", "DOC", "RTF", "TXT", "HTML", "ODT", "MD", "JPG", "PNG", "WEBP"].map((fmt) => (
+        {["PDF", "DOCX", "DOC", "RTF", "TXT", "HTML", "ODT", "MD", "JPG", "PNG", "WEBP", "SVG"].map((fmt) => (
           <span
             key={fmt}
             style={{

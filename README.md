@@ -7,7 +7,7 @@ A full-stack application that extracts structured JSON data from resumes in **an
 ## ✨ Features
 
 - 🤖 **AI-powered extraction** — uses Gemini's vision and language capabilities to parse every section of a resume
-- 🖼️ **Image support** — upload a photo/scan of a resume (JPG, PNG, WEBP)
+- 🖼️ **Image support** — upload a photo/scan of a resume (JPG, PNG, WEBP, SVG)
 - 📄 **Multi-format support** — PDF, DOCX, DOC, RTF, TXT, HTML, ODT, Markdown
 - 🔐 **API key via `.env`** — no need to paste your key in the UI
 - 🧹 **Zero data retention** — files are deleted immediately after extraction
@@ -99,15 +99,16 @@ resume-extractor/
 | -------------------- | ---------------------- | --------------------------------------- |
 | PDF                  | `.pdf`               | Gemini native vision (inline base64)    |
 | Word 2007+           | `.docx`              | mammoth                                 |
-| Word 97-2003         | `.doc`               | mammoth                                 |
+| Word 97-2003         | `.doc`               | word-extractor                          |
 | Rich Text            | `.rtf`               | regex strip                             |
 | Plain Text           | `.txt`               | direct read                             |
 | HTML                 | `.html`, `.htm`    | node-html-parser                        |
 | OpenDocument         | `.odt`               | unzipper + XML parse                    |
 | Markdown             | `.md`, `.markdown` | direct read                             |
-| **JPEG Image** | `.jpg`, `.jpeg`    | **Gemini vision (inline base64)** |
-| **PNG Image**  | `.png`               | **Gemini vision (inline base64)** |
-| **WebP Image** | `.webp`              | **Gemini vision (inline base64)** |
+| **JPEG Image** | `.jpg`, `.jpeg`    | OCR text-first, vision fallback   |
+| **PNG Image**  | `.png`               | OCR text-first, vision fallback   |
+| **WebP Image** | `.webp`              | OCR text-first, vision fallback   |
+| **SVG Resume** | `.svg`               | SVG text-node extraction          |
 
 ---
 
@@ -292,4 +293,7 @@ Common troubleshooting:
 
 ---
 
-If you want these full, separate guides restored later, I can keep them in a docs/ folder instead of the repo root.
+## 📋 Extraction Pipeline
+See [docs/EXTRACTION_PIPELINE.md](docs/EXTRACTION_PIPELINE.md) for a detailed overview of how resumes are processed, parsed, and validated end-to-end.
+
+---

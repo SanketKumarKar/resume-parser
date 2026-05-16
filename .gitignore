@@ -9,9 +9,12 @@ frontend/dist/
 
 # Temp uploads
 backend/tmp/
+/test-resumes*
 
 # Editor / OS files
 .DS_Store
 Thumbs.db
 .vscode/
 *.log
+
+
