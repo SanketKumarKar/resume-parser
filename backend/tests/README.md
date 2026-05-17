@@ -37,6 +37,35 @@ node validateExtraction.js -d ../../test-resumes -c 10 -o report.json
 - Runs extraction twice for each resume and compares the outputs.
 - Reports per-file and overall accuracy, highlighting unstable fields.
 
+### Diff Test (Run On `test-resumes/`)
+This is the "diff test": it extracts every resume twice (Run 1 + Run 2) and reports what changed between the two JSON outputs.
+
+**Prerequisites**
+- Install backend deps: run from `backend/` once: `npm install`
+- Ensure your local extraction backend dependencies are available:
+  - `accuracyTest.js` runs the extraction pipeline directly (it does not call the HTTP server).
+  - It uses the local Ollama endpoint configured in `backend/.env`:
+    - `OLLAMA_URL` (default in code: `http://localhost:11434/api/generate`)
+    - `OLLAMA_MODEL` (default in code: `gemma4`)
+  - Make sure Ollama is running and the model is available locally.
+
+**Run Against The Repo Test Set**
+From `backend/`:
+```bash
+npm run test:accuracy -- -d ../test-resumes -o tests/accuracy_report.json
+```
+Optional flags:
+```bash
+npm run test:accuracy -- -d ../test-resumes --timeout 180000 --quiet
+```
+
+**What To Look At In The Report**
+- `summary.overallAccuracy`: average stability across all resumes (higher is more deterministic).
+- `summary.topUnstableFields`: fields that change most often between runs (best place to debug).
+- `perFileResults[].diffs`: sample diffs per resume (capped), including:
+  - `type: "structural"`: key missing in one run (shape instability)
+  - `type: "value_change"`: value changed between runs (content instability)
+
 **Usage:**
 ```bash
 node accuracyTest.js [options]

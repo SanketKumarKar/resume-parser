@@ -1,557 +1,526 @@
 #!/usr/bin/env node
 /**
- * ============================================================================
- * Resume Extraction Validator — Automated QA for 10k+ Resumes
- * ============================================================================
+ * Batch QA for final /api/extract JSON output.
  *
  * Usage:
- *   node validateExtraction.js --dir <resumeFolder> [options]
- *
- * Options:
- *   --dir, -d        Path to folder containing resume files (required)
- *   --url, -u        API base URL (default: http://localhost:5000)
- *   --concurrency,-c Max parallel requests (default: 5)
- *   --batch, -b      Batch size for progress logging (default: 100)
- *   --out, -o        Output report path (default: ./extraction_report.json)
- *   --timeout, -t    Per-request timeout in ms (default: 60000)
- *   --resume-from    Skip first N files (for resuming interrupted runs)
- *   --sample         Only test a random sample of N files
- *   --quiet, -q      Suppress per-file logs, only show summary
- *
- * Example:
- *   node validateExtraction.js -d ../../resumes -c 10 -o report.json
+ *   node tests/validateExtraction.js --dir <resumeFolder> [options]
  */
 
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import pdfParse from "pdf-parse";
-import mammoth from "mammoth";
+import {
+  EXPECTED_SCHEMA,
+  average,
+  countPopulatedFields,
+  discoverFiles,
+  extractSignals,
+  flattenSchemaPaths,
+  getPath,
+  getRawTextInfo,
+  isEmpty,
+  parseBatchArgs,
+  pct,
+  printTableRow,
+  runPool,
+  sendResumeToApi,
+  shuffleAndSample,
+  typeOfRule,
+  valueAppearsInJson,
+} from "./batchResumeHelpers.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ─── Arg Parsing ─────────────────────────────────────────────────────────────
+const CRITICAL_FIELDS = [
+  "personal_info.full_name",
+  "personal_info.email",
+  "personal_info.phone",
+];
+
+const CONDITIONAL_FIELDS = [
+  "education",
+  "work_experience",
+  "projects",
+  "technical_skills",
+  "certifications",
+  "summary",
+];
+
 function parseArgs() {
-  const args = process.argv.slice(2);
-  const opts = {
-    dir: null,
-    url: "http://localhost:5000",
-    concurrency: 2,
-    batch: 100,
+  return parseBatchArgs({
     out: path.join(__dirname, "extraction_report.json"),
-    timeout: 60000,
-    resumeFrom: 0,
-    sample: 0,
-    quiet: false,
-  };
-
-  for (let i = 0; i < args.length; i++) {
-    switch (args[i]) {
-      case "--dir": case "-d": opts.dir = args[++i]; break;
-      case "--url": case "-u": opts.url = args[++i]; break;
-      case "--concurrency": case "-c": opts.concurrency = parseInt(args[++i], 10); break;
-      case "--batch": case "-b": opts.batch = parseInt(args[++i], 10); break;
-      case "--out": case "-o": opts.out = args[++i]; break;
-      case "--timeout": case "-t": opts.timeout = parseInt(args[++i], 10); break;
-      case "--resume-from": opts.resumeFrom = parseInt(args[++i], 10); break;
-      case "--sample": opts.sample = parseInt(args[++i], 10); break;
-      case "--quiet": case "-q": opts.quiet = true; break;
-    }
-  }
-
-  if (!opts.dir) {
-    console.error("❌ --dir is required. Pass the folder containing resumes.");
-    process.exit(1);
-  }
-  return opts;
+  });
 }
 
-// ─── File Discovery ──────────────────────────────────────────────────────────
-const SUPPORTED_EXTS = new Set([
-  ".pdf", ".docx", ".doc", ".rtf", ".txt", ".html", ".htm",
-  ".odt", ".md", ".markdown", ".jpg", ".jpeg", ".png", ".webp", ".svg",
-]);
-
-function discoverFiles(dir) {
-  const results = [];
-  function walk(d) {
-    for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
-      const full = path.join(d, entry.name);
-      if (entry.isDirectory()) { walk(full); continue; }
-      if (SUPPORTED_EXTS.has(path.extname(entry.name).toLowerCase())) {
-        results.push(full);
-      }
-    }
-  }
-  walk(dir);
-  return results;
-}
-
-function shuffleAndSample(arr, n) {
-  const copy = [...arr];
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return n > 0 && n < copy.length ? copy.slice(0, n) : copy;
-}
-
-// ─── Text Extraction (for comparison) ────────────────────────────────────────
-async function getRawText(filePath) {
-  const ext = path.extname(filePath).toLowerCase();
-  const buffer = fs.readFileSync(filePath);
-  try {
-    if (ext === ".pdf") {
-      const data = await pdfParse(buffer);
-      return data.text;
-    } else if (ext === ".docx") {
-      const result = await mammoth.extractRawText({ buffer });
-      return result.value;
-    } else if (ext === ".txt" || ext === ".md") {
-      return buffer.toString("utf8");
-    }
-    return "";
-  } catch (err) {
-    return "";
-  }
-}
-
-// ─── Schema Validation ──────────────────────────────────────────────────────
-// Maps expected top-level keys → what constitutes a "non-empty" value
-const SCHEMA_RULES = {
-  personal_info: {
-    type: "object",
-    critical: true,
-    fields: {
-      full_name: { type: "string", critical: true },
-      email:     { type: "string", critical: true },
-      phone:     { type: "string", critical: false },
-      address:   { type: "string", critical: false },
-      city:      { type: "string", critical: false },
-      state:     { type: "string", critical: false },
-      country:   { type: "string", critical: false },
-      zip_code:  { type: "string", critical: false },
-      linkedin:  { type: "string", critical: false },
-      github:    { type: "string", critical: false },
-      portfolio: { type: "string", critical: false },
-      website:   { type: "string", critical: false },
-    },
-  },
-  objective:        { type: "string", critical: false },
-  summary:          { type: "string", critical: false },
-  education:        { type: "array",  critical: true, minItems: 0 },
-  work_experience:  { type: "array",  critical: true, minItems: 0 },
-  technical_skills: { type: "object", critical: true },
-  soft_skills:      { type: "array",  critical: false },
-  projects:         { type: "array",  critical: false },
-  certifications:   { type: "array",  critical: false },
-  awards_honors:    { type: "array",  critical: false },
-  publications:     { type: "array",  critical: false },
-  languages:        { type: "array",  critical: false },
-  volunteer_experience:       { type: "array", critical: false },
-  extracurricular_activities: { type: "array", critical: false },
-  interests_hobbies:          { type: "array", critical: false },
-  references:                 { type: "array", critical: false },
-  additional_sections:        { type: "object", critical: false },
-};
-
-function isEmpty(val) {
-  if (val === null || val === undefined) return true;
-  if (typeof val === "string") return val.trim() === "";
-  if (Array.isArray(val)) return val.length === 0;
-  if (typeof val === "object") return Object.keys(val).length === 0;
-  return false;
-}
-
-function validateExtractedData(data, rawText) {
+function validateSchema(data) {
   const issues = [];
   const fieldStatus = {};
-  let criticalMissing = 0;
-  let totalFields = 0;
-  let populatedFields = 0;
 
-  // ─── 1. Schema Completeness ───
-  for (const [key, rule] of Object.entries(SCHEMA_RULES)) {
-    totalFields++;
-    const val = data?.[key];
-
-    if (val === undefined) {
-      issues.push({ field: key, severity: rule.critical ? "CRITICAL" : "WARN", issue: "missing_key" });
+  for (const [key, rule] of Object.entries(EXPECTED_SCHEMA)) {
+    const value = data?.[key];
+    if (value === undefined) {
+      issues.push(issue(key, "ERROR", "missing_key", "Expected top-level key is absent."));
       fieldStatus[key] = "missing";
-      if (rule.critical) criticalMissing++;
       continue;
     }
 
-    // Type check
-    if (rule.type === "array" && !Array.isArray(val)) {
-      issues.push({ field: key, severity: "ERROR", issue: `expected_array_got_${typeof val}` });
-      fieldStatus[key] = "wrong_type";
-      continue;
-    }
-    if (rule.type === "object" && (typeof val !== "object" || Array.isArray(val) || val === null)) {
-      issues.push({ field: key, severity: "ERROR", issue: `expected_object_got_${typeof val}` });
+    const actualType = typeOfRule(value);
+    if (actualType !== rule.type && !(rule.type === "string" && actualType === "null")) {
+      issues.push(issue(key, "ERROR", "wrong_type", `Expected ${rule.type}, got ${actualType}.`));
       fieldStatus[key] = "wrong_type";
       continue;
     }
 
-    // Nested personal_info fields
-    if (key === "personal_info" && rule.fields) {
-      for (const [fk, fr] of Object.entries(rule.fields)) {
-        totalFields++;
-        const fv = val?.[fk];
-        if (isEmpty(fv)) {
-          if (fr.critical) {
-            issues.push({ field: `personal_info.${fk}`, severity: "CRITICAL", issue: "empty_or_null" });
-            criticalMissing++;
-          }
-          fieldStatus[`personal_info.${fk}`] = "empty";
-        } else {
-          populatedFields++;
-          fieldStatus[`personal_info.${fk}`] = "ok";
+    fieldStatus[key] = isEmpty(value) ? "empty" : "ok";
+
+    if (rule.fields && value && typeof value === "object" && !Array.isArray(value)) {
+      for (const [field, expectedType] of Object.entries(rule.fields)) {
+        const childPath = `${key}.${field}`;
+        const childValue = value[field];
+        const childType = typeOfRule(childValue);
+
+        if (childValue === undefined) {
+          issues.push(issue(childPath, "ERROR", "missing_key", "Expected nested key is absent."));
+          fieldStatus[childPath] = "missing";
+          continue;
         }
-      }
-    }
 
-    if (!isEmpty(val)) {
-      populatedFields++;
-      fieldStatus[key] = "ok";
-    } else {
-      fieldStatus[key] = "empty";
-      if (rule.critical) {
-        issues.push({ field: key, severity: "CRITICAL", issue: "empty_or_null" });
-        criticalMissing++;
+        if (childType !== expectedType && !(expectedType === "string" && childType === "null")) {
+          issues.push(issue(childPath, "ERROR", "wrong_type", `Expected ${expectedType}, got ${childType}.`));
+          fieldStatus[childPath] = "wrong_type";
+          continue;
+        }
+
+        fieldStatus[childPath] = isEmpty(childValue) ? "empty" : "ok";
       }
     }
   }
 
-  // ─── 2. Cross-Reference (Recall) Check ───
-  // We check if data present in raw text is missing in JSON
-  const recallResults = {
-    missed_emails: [],
-    missed_phones: [],
-    missed_links: [],
-    missed_skills: [],
-    score: 100
+  return { issues, fieldStatus };
+}
+
+function validateCriticalFields(data, signals) {
+  const issues = [];
+
+  for (const field of CRITICAL_FIELDS) {
+    if (isEmpty(getPath(data, field))) {
+      issues.push(issue(field, "CRITICAL", "empty_critical_field", "Critical contact field is empty."));
+    }
+  }
+
+  for (const field of CONDITIONAL_FIELDS) {
+    if (signals.sections[field] && isEmpty(getPath(data, field))) {
+      issues.push(issue(field, "CRITICAL", "section_seen_in_text_but_empty", "Raw text suggests this section exists."));
+    }
+  }
+
+  if (signals.skills.length > 0 && countSkills(data) === 0) {
+    issues.push(issue("technical_skills", "CRITICAL", "skills_seen_in_text_but_empty", "Skills were detected in raw text."));
+  }
+
+  return issues;
+}
+
+function validateRecall(data, signals) {
+  const missed = {
+    emails: [],
+    phones: [],
+    links: [],
+    dates: [],
+    skills: [],
+    sections: [],
+  };
+  const issues = [];
+
+  for (const email of signals.emails) {
+    if (!valueAppearsInJson(email, data)) missed.emails.push(email);
+  }
+
+  for (const phone of signals.phones) {
+    const compactPhone = phone.replace(/\D/g, "");
+    const jsonDigits = JSON.stringify(data || {}).replace(/\D/g, "");
+    if (compactPhone.length >= 8 && !jsonDigits.includes(compactPhone.slice(-8))) {
+      missed.phones.push(phone);
+    }
+  }
+
+  for (const link of signals.links) {
+    if (!valueAppearsInJson(link, data)) missed.links.push(link);
+  }
+
+  for (const date of signals.dates) {
+    if (!valueAppearsInJson(date, data)) missed.dates.push(date);
+  }
+
+  for (const skill of signals.skills) {
+    if (!valueAppearsInJson(skill, data)) missed.skills.push(skill);
+  }
+
+  for (const [section, seen] of Object.entries(signals.sections)) {
+    if (seen && isEmpty(getPath(data, section))) missed.sections.push(section);
+  }
+
+  addMissedIssues(issues, "personal_info.email", "CRITICAL", "missed_email_from_text", missed.emails);
+  addMissedIssues(issues, "personal_info.phone", "CRITICAL", "missed_phone_from_text", missed.phones);
+  addMissedIssues(issues, "links", "WARN", "missed_link_from_text", missed.links);
+  addMissedIssues(issues, "dates", "WARN", "missed_date_from_text", missed.dates.slice(0, 10));
+  addMissedIssues(issues, "technical_skills", "WARN", "missed_skill_from_text", missed.skills);
+  addMissedIssues(issues, "sections", "CRITICAL", "missed_section_from_text", missed.sections);
+
+  const recallScore = Math.max(0, 100
+    - missed.emails.length * 20
+    - missed.phones.length * 15
+    - missed.sections.length * 12
+    - missed.links.length * 8
+    - missed.skills.length * 5
+    - Math.min(missed.dates.length, 10) * 2);
+
+  return { missed, issues, recallScore };
+}
+
+function addMissedIssues(issues, field, severity, code, values) {
+  for (const value of values) {
+    issues.push(issue(field, severity, code, String(value)));
+  }
+}
+
+function scoreValidation({ schemaIssues, criticalIssues, recall, rawInfo, apiBody, coverage }) {
+  const schemaPenalty = schemaIssues.filter((item) => item.severity === "ERROR").length * 5;
+  const criticalPenalty = criticalIssues.filter((item) => item.severity === "CRITICAL").length * 12;
+  const metadataPenalty = [
+    rawInfo.parseError ? 8 : 0,
+    rawInfo.textLength > 0 && rawInfo.textLength < 250 ? 6 : 0,
+    apiBody?.fallback ? 5 : 0,
+    (apiBody?.warnings || []).length * 2,
+  ].reduce((sum, value) => sum + value, 0);
+
+  const schemaScore = Math.max(0, 100 - schemaPenalty);
+  const criticalScore = Math.max(0, 100 - criticalPenalty);
+  const metadataScore = Math.max(0, 100 - metadataPenalty);
+
+  return Math.round(
+    schemaScore * 0.25 +
+    criticalScore * 0.25 +
+    recall.recallScore * 0.35 +
+    coverage.percent * 0.10 +
+    metadataScore * 0.05
+  );
+}
+
+async function validateFile(filePath, opts, baseDir) {
+  const started = Date.now();
+  const relativePath = path.relative(baseDir, filePath);
+  const ext = path.extname(filePath).toLowerCase();
+  const rawInfo = await getRawTextInfo(filePath);
+  const signals = extractSignals(rawInfo.text);
+  const apiResult = await sendResumeToApi(filePath, opts.url, opts.timeout);
+
+  const record = {
+    file: path.basename(filePath),
+    path: filePath,
+    relativePath,
+    ext,
+    elapsed: Date.now() - started,
+    status: apiResult.status,
+    sourceType: rawInfo.sourceType,
+    textLength: rawInfo.textLength,
+    parseError: rawInfo.parseError,
+    warnings: rawInfo.warnings,
   };
 
-  if (rawText) {
-    const textLower = rawText.toLowerCase();
-    const jsonString = JSON.stringify(data).toLowerCase();
-
-    // Check Emails
-    const emails = rawText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
-    [...new Set(emails)].forEach(email => {
-      if (!jsonString.includes(email.toLowerCase())) {
-        recallResults.missed_emails.push(email);
-        issues.push({ field: "personal_info.email", severity: "CRITICAL", issue: `missed_from_text: ${email}` });
-      }
-    });
-
-    // Check Links
-    const links = rawText.match(/(linkedin\.com\/in\/|github\.com\/)[a-zA-Z0-9_-]+/gi) || [];
-    [...new Set(links)].forEach(link => {
-      if (!jsonString.includes(link.toLowerCase())) {
-        recallResults.missed_links.push(link);
-        issues.push({ field: "links", severity: "WARN", issue: `missed_from_text: ${link}` });
-      }
-    });
-
-    // Check common skills (Top 20 most frequent)
-    const commonSkills = ["python", "javascript", "react", "node", "aws", "docker", "sql", "java", "c++", "typescript", "angular", "vue", "git", "html", "css", "mongodb", "postgresql", "kubernetes", "express", "flutter"];
-    commonSkills.forEach(skill => {
-      // Escape special regex characters (like + in C++)
-      const escaped = skill.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      // Use a pattern that handles skills with trailing symbols like C++
-      const regex = new RegExp(`(?:^|\\s|\\b)${escaped}(?:$|\\s|\\b|[.,;])`, "i");
-      
-      if (regex.test(rawText) && !jsonString.includes(skill.toLowerCase())) {
-        recallResults.missed_skills.push(skill);
-      }
-    });
-
-    // Simple recall score penalty
-    let penalties = (recallResults.missed_emails.length * 20) + 
-                    (recallResults.missed_links.length * 10) + 
-                    (recallResults.missed_skills.length * 5);
-    recallResults.score = Math.max(0, 100 - penalties);
+  if (apiResult.error) {
+    return {
+      ...record,
+      result: apiResult.error === "request_timeout" ? "TIMEOUT" : "ERROR",
+      error: apiResult.error,
+      qualityScore: 0,
+    };
   }
 
-  // Quality score: weighted average of completeness and recall
-  const completeness = totalFields > 0 ? Math.round((populatedFields / totalFields) * 100) : 0;
-  const qualityScore = Math.round((completeness * 0.4) + (recallResults.score * 0.6));
-
-  return { issues, fieldStatus, completeness, criticalMissing, recall: recallResults, qualityScore };
-}
-
-// ─── API Caller ──────────────────────────────────────────────────────────────
-async function sendToApi(filePath, apiUrl, timeoutMs) {
-  const formData = new FormData();
-  const fileBuffer = fs.readFileSync(filePath);
-  const blob = new Blob([fileBuffer]);
-  formData.append("resume", blob, path.basename(filePath));
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const res = await fetch(`${apiUrl}/api/extract`, {
-      method: "POST",
-      body: formData,
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-
-    const body = await res.json();
-    return { status: res.status, body, error: null };
-  } catch (err) {
-    clearTimeout(timer);
-    return { status: 0, body: null, error: err.message };
-  }
-}
-
-// ─── Concurrency Pool ───────────────────────────────────────────────────────
-async function runPool(items, concurrency, handler) {
-  const results = new Array(items.length);
-  let idx = 0;
-
-  async function worker() {
-    while (idx < items.length) {
-      const i = idx++;
-      results[i] = await handler(items[i], i);
-    }
+  if (apiResult.status !== 200 || !apiResult.body?.success) {
+    return {
+      ...record,
+      result: "HTTP_ERROR",
+      error: apiResult.body?.error || `HTTP ${apiResult.status}`,
+      qualityScore: 0,
+    };
   }
 
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
-  await Promise.all(workers);
-  return results;
-}
-
-// ─── Main ────────────────────────────────────────────────────────────────────
-async function main() {
-  const opts = parseArgs();
-  const resolvedDir = path.resolve(opts.dir);
-
-  console.log("🔍 Discovering resume files...");
-  let files = discoverFiles(resolvedDir);
-  console.log(`   Found ${files.length} supported files`);
-
-  if (files.length === 0) {
-    console.error("❌ No supported files found. Exiting.");
-    process.exit(1);
-  }
-
-  // Sample / resume-from
-  if (opts.sample > 0) {
-    files = shuffleAndSample(files, opts.sample);
-    console.log(`   Sampled ${files.length} files`);
-  }
-  if (opts.resumeFrom > 0) {
-    files = files.slice(opts.resumeFrom);
-    console.log(`   Skipping first ${opts.resumeFrom}, ${files.length} remaining`);
-  }
-
-  const total = files.length;
-  const startTime = Date.now();
-
-  // Counters
-  const stats = {
-    total,
-    success: 0,
-    failed: 0,
-    fallback: 0,
-    httpErrors: 0,
-    timeouts: 0,
-    avgCompleteness: 0,
-    criticalFailures: 0,
-    byExtension: {},
-  };
-
-  const fileResults = [];
-  let completenessSum = 0;
-  let processed = 0;
-
-  console.log(`\n🚀 Starting extraction of ${total} resumes (concurrency: ${opts.concurrency})\n`);
-
-  await runPool(files, opts.concurrency, async (filePath, index) => {
-    const ext = path.extname(filePath).toLowerCase();
-    const basename = path.basename(filePath);
-    const fileStart = Date.now();
-
-    // Extension tracking
-    if (!stats.byExtension[ext]) {
-      stats.byExtension[ext] = { total: 0, success: 0, failed: 0, fallback: 0 };
-    }
-    stats.byExtension[ext].total++;
-
-    const { status, body, error } = await sendToApi(filePath, opts.url, opts.timeout);
-    const elapsed = Date.now() - fileStart;
-
-    const record = { file: basename, path: filePath, ext, elapsed, status };
-
-    if (error) {
-      record.result = "ERROR";
-      record.error = error;
-      stats.failed++;
-      stats.byExtension[ext].failed++;
-      if (error.includes("abort")) stats.timeouts++;
-    } else if (status !== 200 || !body?.success) {
-      record.result = "HTTP_ERROR";
-      record.error = body?.error || `HTTP ${status}`;
-      stats.httpErrors++;
-      stats.failed++;
-      stats.byExtension[ext].failed++;
-    } else {
-      // Step 1: Get raw text for comparison
-      const rawText = await getRawText(filePath);
-
-      // Step 2: Validate the extracted data vs raw text
-      const validation = validateExtractedData(body.data, rawText);
-      record.result = (validation.criticalMissing > 0 || validation.recall.score < 80) ? "PARTIAL" : "OK";
-      record.completeness = validation.completeness;
-      record.recallScore = validation.recall.score;
-      record.qualityScore = validation.qualityScore;
-      record.issues = validation.issues;
-      record.fallback = body.fallback || false;
-      record.missed = validation.recall;
-
-      completenessSum += validation.qualityScore; // Using qualityScore for overall avg
-      stats.success++;
-      stats.byExtension[ext].success++;
-
-      if (body.fallback) {
-        stats.fallback++;
-        stats.byExtension[ext].fallback++;
-      }
-      if (validation.criticalMissing > 0) {
-        stats.criticalFailures++;
-      }
-    }
-
-    fileResults.push(record);
-    processed++;
-
-    // Progress logging
-    if (!opts.quiet && (processed % opts.batch === 0 || processed === total)) {
-      const pct = ((processed / total) * 100).toFixed(1);
-      const elapsedTotal = ((Date.now() - startTime) / 1000).toFixed(0);
-      const rate = (processed / ((Date.now() - startTime) / 1000)).toFixed(1);
-      console.log(
-        `   [${pct}%] ${processed}/${total} | ` +
-        `✅ ${stats.success} ❌ ${stats.failed} ⚠️ ${stats.fallback} fallback | ` +
-        `${rate} files/s | ${elapsedTotal}s elapsed`
-      );
-    }
-
-    return record;
+  const data = apiResult.body.data || {};
+  const schema = validateSchema(data);
+  const criticalIssues = validateCriticalFields(data, signals);
+  const recall = validateRecall(data, signals);
+  const coverage = countPopulatedFields(data);
+  const issues = [...schema.issues, ...criticalIssues, ...recall.issues];
+  const qualityScore = scoreValidation({
+    schemaIssues: schema.issues,
+    criticalIssues,
+    recall,
+    rawInfo,
+    apiBody: apiResult.body,
+    coverage,
   });
+  const criticalCount = issues.filter((item) => item.severity === "CRITICAL").length;
 
-  // ─── Final Stats ─────────────────────────────────────────────────────────
-  const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  stats.avgCompleteness = stats.success > 0 ? Math.round(completenessSum / stats.success) : 0;
+  return {
+    ...record,
+    result: criticalCount > 0 || qualityScore < 80 ? "PARTIAL" : "OK",
+    fallback: Boolean(apiResult.body.fallback),
+    apiSourceType: apiResult.body.sourceType,
+    apiTextLength: apiResult.body.textLength,
+    apiWarnings: apiResult.body.warnings || [],
+    completeness: coverage.percent,
+    recallScore: recall.recallScore,
+    qualityScore,
+    criticalCount,
+    issueCount: issues.length,
+    issues,
+    fieldStatus: schema.fieldStatus,
+    missed: recall.missed,
+    detected: {
+      emails: signals.emails.length,
+      phones: signals.phones.length,
+      links: signals.links.length,
+      dates: signals.dates.length,
+      skills: signals.skills,
+      sections: Object.entries(signals.sections).filter(([, seen]) => seen).map(([key]) => key),
+    },
+  };
+}
 
-  // Identify top issues
-  const issueCounts = {};
-  for (const r of fileResults) {
-    if (r.issues) {
-      for (const iss of r.issues) {
-        const key = `${iss.field}:${iss.issue}`;
-        issueCounts[key] = (issueCounts[key] || 0) + 1;
-      }
-    }
-  }
-  const topIssues = Object.entries(issueCounts)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 20)
-    .map(([key, count]) => ({ field_issue: key, count, pct: ((count / stats.success) * 100).toFixed(1) + "%" }));
+function buildReport({ opts, files, results, elapsedSeconds }) {
+  const successful = results.filter((result) => ["OK", "PARTIAL"].includes(result.result));
+  const failed = results.filter((result) => !["OK", "PARTIAL"].includes(result.result));
+  const partial = results.filter((result) => result.result === "PARTIAL");
+  const ok = results.filter((result) => result.result === "OK");
+  const fallback = successful.filter((result) => result.fallback).length;
+  const criticalFailures = successful.filter((result) => result.criticalCount > 0).length;
 
-  // Files with worst completeness
-  const worstFiles = fileResults
-    .filter(r => r.completeness !== undefined)
-    .sort((a, b) => a.completeness - b.completeness)
-    .slice(0, 20)
-    .map(r => ({ file: r.file, completeness: r.completeness, issues: r.issues?.length || 0 }));
+  const summary = {
+    total: files.length,
+    ok: ok.length,
+    partial: partial.length,
+    success: successful.length,
+    failed: failed.length,
+    fallback,
+    httpErrors: results.filter((result) => result.result === "HTTP_ERROR").length,
+    timeouts: results.filter((result) => result.result === "TIMEOUT").length,
+    criticalFailures,
+    avgCompleteness: Math.round(average(successful.map((result) => result.completeness))),
+    avgRecallScore: Math.round(average(successful.map((result) => result.recallScore))),
+    avgQualityScore: Math.round(average(successful.map((result) => result.qualityScore))),
+    successRate: `${pct(successful.length, files.length)}%`,
+    criticalFailureRate: `${pct(criticalFailures, successful.length)}%`,
+    fallbackRate: `${pct(fallback, successful.length)}%`,
+  };
 
-  // ─── Report ──────────────────────────────────────────────────────────────
-  const report = {
+  return {
     meta: {
       timestamp: new Date().toISOString(),
-      directory: resolvedDir,
-      totalFiles: total,
-      elapsedSeconds: parseFloat(totalElapsed),
+      directory: opts.dir,
+      totalFiles: files.length,
+      elapsedSeconds,
       concurrency: opts.concurrency,
       apiUrl: opts.url,
     },
-    summary: {
-      ...stats,
-      successRate: ((stats.success / total) * 100).toFixed(1) + "%",
-      fallbackRate: stats.success > 0 ? ((stats.fallback / stats.success) * 100).toFixed(1) + "%" : "N/A",
-      criticalFailureRate: stats.success > 0 ? ((stats.criticalFailures / stats.success) * 100).toFixed(1) + "%" : "N/A",
-    },
-    topIssues,
-    worstFiles,
-    byExtension: stats.byExtension,
-    // Only include failed files inline (full results go to report file)
-    failedFiles: fileResults.filter(r => r.result === "ERROR" || r.result === "HTTP_ERROR").map(r => ({
-      file: r.file, error: r.error, status: r.status,
+    summary,
+    byExtension: buildExtensionSummary(results),
+    topIssues: buildTopIssues(results, successful.length),
+    fieldCoverage: buildFieldCoverage(results),
+    worstFiles: successful
+      .slice()
+      .sort((a, b) => a.qualityScore - b.qualityScore)
+      .slice(0, 20)
+      .map((result) => ({
+        file: result.relativePath,
+        qualityScore: result.qualityScore,
+        completeness: result.completeness,
+        recallScore: result.recallScore,
+        criticalCount: result.criticalCount,
+        issueCount: result.issueCount,
+      })),
+    failedFiles: failed.map((result) => ({
+      file: result.relativePath,
+      result: result.result,
+      status: result.status,
+      error: result.error,
     })),
+    allResults: results,
   };
+}
 
-  // Write full report
-  const fullReport = { ...report, allResults: fileResults };
-  fs.writeFileSync(opts.out, JSON.stringify(fullReport, null, 2));
-
-  // ─── Console Summary ────────────────────────────────────────────────────
-  console.log("\n" + "═".repeat(70));
-  console.log("  EXTRACTION VALIDATION REPORT");
-  console.log("═".repeat(70));
-  console.log(`  Total files tested:      ${total}`);
-  console.log(`  Successful extractions:  ${stats.success} (${report.summary.successRate})`);
-  console.log(`  Failed:                  ${stats.failed}`);
-  console.log(`  Timeouts:                ${stats.timeouts}`);
-  console.log(`  Used fallback parser:    ${stats.fallback} (${report.summary.fallbackRate})`);
-  console.log(`  Critical field missing:  ${stats.criticalFailures} (${report.summary.criticalFailureRate})`);
-  console.log(`  Avg completeness score:  ${stats.avgCompleteness}%`);
-  console.log(`  Time elapsed:            ${totalElapsed}s`);
-  console.log(`  Throughput:              ${(total / parseFloat(totalElapsed)).toFixed(1)} files/s`);
-  console.log("─".repeat(70));
-
-  console.log("\n  📊 By Extension:");
-  for (const [ext, s] of Object.entries(stats.byExtension)) {
-    console.log(`    ${ext.padEnd(10)} total: ${s.total}  ok: ${s.success}  fail: ${s.failed}  fallback: ${s.fallback}`);
+function buildExtensionSummary(results) {
+  const byExtension = {};
+  for (const result of results) {
+    if (!byExtension[result.ext]) {
+      byExtension[result.ext] = {
+        total: 0,
+        ok: 0,
+        partial: 0,
+        failed: 0,
+        fallback: 0,
+        averageQualityScore: 0,
+      };
+    }
+    const bucket = byExtension[result.ext];
+    bucket.total++;
+    if (result.result === "OK") bucket.ok++;
+    else if (result.result === "PARTIAL") bucket.partial++;
+    else bucket.failed++;
+    if (result.fallback) bucket.fallback++;
+    if (typeof result.qualityScore === "number") bucket.averageQualityScore += result.qualityScore;
   }
 
-  if (topIssues.length > 0) {
-    console.log("\n  ⚠️  Top Issues:");
-    for (const iss of topIssues.slice(0, 10)) {
-      console.log(`    ${iss.count.toString().padStart(6)} (${iss.pct.padStart(6)})  ${iss.field_issue}`);
+  for (const bucket of Object.values(byExtension)) {
+    const scored = bucket.ok + bucket.partial;
+    bucket.averageQualityScore = scored ? Math.round(bucket.averageQualityScore / scored) : 0;
+  }
+  return byExtension;
+}
+
+function buildTopIssues(results, successCount) {
+  const counts = {};
+  for (const result of results) {
+    for (const item of result.issues || []) {
+      const key = `${item.field}:${item.code}`;
+      counts[key] = (counts[key] || 0) + 1;
     }
   }
 
-  if (worstFiles.length > 0) {
-    console.log("\n  📉 Lowest Completeness:");
-    for (const f of worstFiles.slice(0, 5)) {
-      console.log(`    ${f.completeness.toString().padStart(3)}%  ${f.file} (${f.issues} issues)`);
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 25)
+    .map(([fieldIssue, count]) => ({
+      fieldIssue,
+      count,
+      pct: `${pct(count, successCount)}%`,
+    }));
+}
+
+function buildFieldCoverage(results) {
+  const fields = flattenSchemaPaths(EXPECTED_SCHEMA);
+  const successful = results.filter((result) => ["OK", "PARTIAL"].includes(result.result));
+  const coverage = {};
+
+  for (const field of fields) {
+    let ok = 0;
+    let empty = 0;
+    let missing = 0;
+    let wrongType = 0;
+
+    for (const result of successful) {
+      const status = result.fieldStatus?.[field];
+      if (status === "ok") ok++;
+      else if (status === "empty") empty++;
+      else if (status === "wrong_type") wrongType++;
+      else missing++;
+    }
+
+    coverage[field] = {
+      ok,
+      empty,
+      missing,
+      wrongType,
+      populatedRate: `${pct(ok, successful.length)}%`,
+    };
+  }
+
+  return coverage;
+}
+
+function issue(field, severity, code, detail) {
+  return { field, severity, code, detail };
+}
+
+function countSkills(data) {
+  const skills = data?.technical_skills;
+  if (!skills || typeof skills !== "object" || Array.isArray(skills)) return 0;
+  return Object.values(skills).reduce((sum, value) => sum + (Array.isArray(value) ? value.length : 0), 0);
+}
+
+function prepareFiles(opts) {
+  if (!fs.existsSync(opts.dir)) {
+    throw new Error(`Directory does not exist: ${opts.dir}`);
+  }
+
+  let files = discoverFiles(opts.dir);
+  if (opts.sample > 0) files = shuffleAndSample(files, opts.sample);
+  if (opts.resumeFrom > 0) files = files.slice(opts.resumeFrom);
+  return files;
+}
+
+async function main() {
+  const opts = parseArgs();
+  const files = prepareFiles(opts);
+
+  if (files.length === 0) {
+    console.error(`No supported resume files found in ${opts.dir}`);
+    process.exit(1);
+  }
+
+  const start = Date.now();
+  let processed = 0;
+
+  console.log(`\nValidating ${files.length} resumes through ${opts.url}/api/extract`);
+  console.log(`Directory: ${opts.dir}`);
+  console.log(`Concurrency: ${opts.concurrency}\n`);
+
+  if (!opts.quiet) {
+    console.log(printTableRow(["#", "File", "Result", "Quality", "Recall", "Issues"], [5, 42, 10, 8, 8, 8]));
+    console.log("-".repeat(91));
+  }
+
+  const results = await runPool(files, opts.concurrency, async (filePath, index) => {
+    const result = await validateFile(filePath, opts, opts.dir);
+    processed++;
+
+    if (!opts.quiet) {
+      console.log(printTableRow([
+        index + 1,
+        result.relativePath,
+        result.result,
+        result.qualityScore ?? 0,
+        result.recallScore ?? 0,
+        result.issueCount ?? result.error ?? 0,
+      ], [5, 42, 10, 8, 8, 8]));
+    } else if (processed % opts.batch === 0 || processed === files.length) {
+      const rate = processed / ((Date.now() - start) / 1000);
+      console.log(`Processed ${processed}/${files.length} (${rate.toFixed(1)} files/s)`);
+    }
+
+    return result;
+  });
+
+  const elapsedSeconds = Number(((Date.now() - start) / 1000).toFixed(1));
+  const report = buildReport({ opts, files, results, elapsedSeconds });
+
+  fs.writeFileSync(opts.out, JSON.stringify(report, null, 2));
+
+  console.log("\nExtraction Validation Summary");
+  console.log("-".repeat(58));
+  console.log(`Total files:           ${report.summary.total}`);
+  console.log(`OK / Partial / Failed: ${report.summary.ok} / ${report.summary.partial} / ${report.summary.failed}`);
+  console.log(`Average quality:       ${report.summary.avgQualityScore}`);
+  console.log(`Average completeness:  ${report.summary.avgCompleteness}`);
+  console.log(`Average recall:        ${report.summary.avgRecallScore}`);
+  console.log(`Critical failures:     ${report.summary.criticalFailures} (${report.summary.criticalFailureRate})`);
+  console.log(`Fallback parser:       ${report.summary.fallback} (${report.summary.fallbackRate})`);
+  console.log(`Elapsed:               ${elapsedSeconds}s`);
+  console.log(`Report saved to:       ${opts.out}`);
+
+  if (report.topIssues.length > 0) {
+    console.log("\nTop Issues");
+    for (const item of report.topIssues.slice(0, 10)) {
+      console.log(`- ${item.count} (${item.pct}) ${item.fieldIssue}`);
     }
   }
 
-  if (report.failedFiles.length > 0) {
-    console.log(`\n  ❌ Failed Files (showing first 10 of ${report.failedFiles.length}):`);
-    for (const f of report.failedFiles.slice(0, 10)) {
-      console.log(`    ${f.file}: ${f.error}`);
-    }
-  }
-
-  console.log("\n" + "═".repeat(70));
-  console.log(`  Full report saved to: ${opts.out}`);
-  console.log("═".repeat(70) + "\n");
-
-  // Exit code: non-zero if critical failure rate > 10%
-  const critRate = stats.success > 0 ? (stats.criticalFailures / stats.success) : 1;
-  process.exit(critRate > 0.1 ? 1 : 0);
+  const shouldFail = report.summary.failed > 0 || report.summary.avgQualityScore < 75;
+  process.exit(shouldFail ? 1 : 0);
 }
 
 main().catch((err) => {
-  console.error("Fatal error:", err);
+  console.error(`Fatal error: ${err.message}`);
   process.exit(2);
 });
