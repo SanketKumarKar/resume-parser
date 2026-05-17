@@ -93,6 +93,12 @@ resume-extractor/
 
 ---
 
+## 🗺️ Extraction Pipeline Diagram
+
+![Pipeline Diagram](Pipeline%20Diagram.png)
+
+---
+
 ## 📋 Supported File Formats
 
 | Format               | Extension              | Method                                  |
