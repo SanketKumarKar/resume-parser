@@ -15,7 +15,7 @@ This document describes the end-to-end process for extracting structured data fr
   - Regex/other logic for TXT, RTF, etc.
 
 ## 3. AI Extraction
-- Extracted text is sent to `extractResumeData` (`backend/geminiService.js`).
+- Extracted text is sent to `extractResumeData` (`backend/aiService.js`).
 - Builds a strict JSON schema prompt and calls a local LLM (Ollama/Gemma4) to extract structured data.
 - Canonicalizes the result to match the expected schema.
 
