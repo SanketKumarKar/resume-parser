@@ -17,4 +17,7 @@ Thumbs.db
 .vscode/
 *.log
 
+# test logs
+backend/tests/*.json
+
 
