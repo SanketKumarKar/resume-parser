@@ -24,6 +24,7 @@
  *   --dir, -d    Resume folder (default: ../../test-resumes)
  *   --out, -o    Output report path (default: ./accuracy_report.json)
  *   --timeout    Per-extraction timeout ms (default: 120000)
+ *   --sample, -s Randomly test N files (default: all files)
  *   --quiet, -q  Suppress per-file logs
  *
  * Example:
@@ -32,10 +33,10 @@
 
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
-import { extractTextFromFile } from "../fileParser.js";
-import { extractResumeData } from "../geminiService.js";
-import { canonicalizeResumeData } from "../resumeCanonicalizer.js";
+import { fileURLToPath } from "url"; // For __dirname in ES modules
+import { extractTextFromFile } from "../fileParser.js"; // Uses same parsing logic as main extraction to ensure consistency in test inputs
+import { extractResumeData } from "../aiService.js"; // Uses same extraction logic as main extraction to test consistency of the entire pipeline
+import { canonicalizeResumeData } from "../resumeCanonicalizer.js"; // Canonicalization ensures that semantically identical outputs with minor structural differences are treated as matches (e.g. normalizing date formats, sorting arrays, etc.)
 import dotenv from "dotenv";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -51,6 +52,7 @@ function parseArgs() {
     dir: path.resolve(__dirname, "..", "..", "test-resumes"),
     out: path.join(__dirname, "accuracy_report.json"),
     timeout: 120000,
+    sample: 0,
     quiet: false,
   };
 
@@ -59,6 +61,7 @@ function parseArgs() {
       case "--dir": case "-d": opts.dir = path.resolve(args[++i]); break;
       case "--out": case "-o": opts.out = args[++i]; break;
       case "--timeout": case "-t": opts.timeout = parseInt(args[++i], 10); break;
+      case "--sample": case "-s": opts.sample = parseInt(args[++i], 10); break;
       case "--quiet": case "-q": opts.quiet = true; break;
     }
   }
@@ -210,6 +213,66 @@ function compareFlat(flat1, flat2) {
 }
 
 // ─── Single Resume Extraction ────────────────────────────────────────────────
+// Accuracy should measure extracted content, not arbitrary model ordering.
+// Only top-level work_experience and education order is meaningful.
+function normalizeForAccuracyComparison(value, path = "") {
+  if (Array.isArray(value)) {
+    const normalized = value.map((item) => normalizeForAccuracyComparison(item, `${path}[]`));
+    if (path === "work_experience" || path === "education") return normalized;
+    return unorderedArrayToComparableObject(normalized);
+  }
+
+  if (value && typeof value === "object") {
+    const result = {};
+    for (const key of Object.keys(value).sort((a, b) => a.localeCompare(b))) {
+      const childPath = path ? `${path}.${key}` : key;
+      result[key] = normalizeForAccuracyComparison(value[key], childPath);
+    }
+    return result;
+  }
+
+  return value;
+}
+
+function unorderedArrayToComparableObject(items) {
+  if (items.length === 0) return [];
+
+  const buckets = {};
+  for (const item of items) {
+    const key = comparableItemKey(item);
+    buckets[key] = item;
+  }
+  return buckets;
+}
+
+function comparableItemKey(item) {
+  const text = stableStringify(item);
+  const slug = normalise(text)
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48) || "item";
+  return `${slug}_${hashString(text)}`;
+}
+
+function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort((a, b) => a.localeCompare(b))
+      .map((key) => `${key}:${stableStringify(value[key])}`)
+      .join(",")}}`;
+  }
+  return String(value ?? "");
+}
+
+function hashString(value) {
+  let hash = 5381;
+  for (let i = 0; i < value.length; i++) {
+    hash = ((hash << 5) + hash) ^ value.charCodeAt(i);
+  }
+  return (hash >>> 0).toString(36);
+}
+
 async function extractOnce(filePath, apiKey, timeoutMs) {
   const originalName = path.basename(filePath);
   const ext = path.extname(originalName).toLowerCase();
@@ -307,12 +370,15 @@ async function main() {
   const apiKey = process.env.GEMINI_API_KEY;
 
   console.log(`\n${COLORS.bold}${COLORS.cyan}╔${"═".repeat(68)}╗${COLORS.reset}`);
-  console.log(`${COLORS.bold}${COLORS.cyan}║${COLORS.reset}  ${COLORS.bold}🔬 RESUME PARSER ACCURACY TEST — Consistency Checker${COLORS.reset}             ${COLORS.bold}${COLORS.cyan}║${COLORS.reset}`);
+  console.log(`${COLORS.bold}${COLORS.cyan}║${COLORS.reset}  ${COLORS.bold}🔬 RESUME PARSER ACCURACY TEST — Consistency Checker${COLORS.reset}              ${COLORS.bold}${COLORS.cyan}║${COLORS.reset}`);
   console.log(`${COLORS.bold}${COLORS.cyan}╚${"═".repeat(68)}╝${COLORS.reset}\n`);
 
   // Discover files
   console.log(`${COLORS.cyan}📂 Scanning:${COLORS.reset} ${opts.dir}`);
-  const files = discoverFiles(opts.dir);
+  let files = discoverFiles(opts.dir);
+  if (opts.sample > 0 && opts.sample < files.length) {
+    files = shuffle(files).slice(0, opts.sample);
+  }
   console.log(`${COLORS.cyan}📋 Found:${COLORS.reset}    ${files.length} supported resume files\n`);
 
   if (files.length === 0) {
@@ -361,6 +427,8 @@ async function main() {
     }
     process.stdout.write(`${COLORS.green} ✓  ${COLORS.reset}  `);
 
+    // Add delay between runs to reduce load
+    await new Promise(resolve => setTimeout(resolve, 2500));
     // ── Run 2 ──
     const run2 = await extractOnce(filePath, apiKey, opts.timeout);
 
@@ -381,8 +449,8 @@ async function main() {
     process.stdout.write(`${COLORS.green} ✓  ${COLORS.reset}  `);
 
     // ── Compare ──
-    const flat1 = flattenJSON(canonicalizeResumeData(run1.data));
-    const flat2 = flattenJSON(canonicalizeResumeData(run2.data));
+    const flat1 = flattenJSON(normalizeForAccuracyComparison(canonicalizeResumeData(run1.data)));
+    const flat2 = flattenJSON(normalizeForAccuracyComparison(canonicalizeResumeData(run2.data)));
     const comparison = compareFlat(flat1, flat2);
 
     process.stdout.write(`${colorAccuracy(comparison.accuracy)}\n`);
@@ -513,6 +581,15 @@ function truncate(s, maxLen) {
   if (s === null || s === undefined) return "(null)";
   const str = String(s);
   return str.length > maxLen ? str.slice(0, maxLen - 1) + "…" : str;
+}
+
+function shuffle(items) {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
 }
 
 function buildExtensionSummary(results) {

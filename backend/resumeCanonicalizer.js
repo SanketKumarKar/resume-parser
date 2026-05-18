@@ -157,6 +157,8 @@ export function canonicalizeResumeData(input = {}) {
     result.additional_sections[slugifySectionKey(key)] = canonicalizeValue(value, `additional_sections.${key}`);
   }
 
+  normalizeSkillBuckets(result);
+
   return sortObjectKeys(result);
 }
 
@@ -279,6 +281,77 @@ function canonicalizeAdditionalSections(value) {
     }
   }
   return sortObjectKeys(result);
+}
+
+function normalizeSkillBuckets(resume) {
+  const tech = resume.technical_skills || {};
+  tech.other = Array.isArray(tech.other) ? tech.other : [];
+  resume.soft_skills = Array.isArray(resume.soft_skills) ? resume.soft_skills : [];
+
+  const genericSkills = takeAdditionalSectionArray(resume.additional_sections, "skills");
+  for (const skill of genericSkills) {
+    addSkillToDeterministicBucket(resume, skill);
+  }
+
+  const stableOther = [];
+  for (const skill of tech.other) {
+    if (isSoftSkill(skill)) addUnique(resume.soft_skills, skill);
+    else stableOther.push(skill);
+  }
+  tech.other = stableOther;
+
+  const stableSoft = [];
+  for (const skill of resume.soft_skills) {
+    if (isClearlyTechnicalSkill(skill)) addUnique(tech.other, skill);
+    else stableSoft.push(skill);
+  }
+  resume.soft_skills = stableSoft;
+
+  tech.other = dedupeArray(tech.other).sort(compareStableValues);
+  resume.soft_skills = dedupeArray(resume.soft_skills).sort(compareStableValues);
+}
+
+function takeAdditionalSectionArray(sections, key) {
+  if (!isPlainObject(sections) || !(key in sections)) return [];
+  const value = sections[key];
+  delete sections[key];
+  if (Array.isArray(value)) return value.filter((item) => !isEmptyCanonicalValue(item));
+  if (typeof value === "string") return splitSkillList(value);
+  return [];
+}
+
+function splitSkillList(value) {
+  return String(value)
+    .split(/\n|;|\s+\|\s+/)
+    .map((item) => normalizeTextValue(item))
+    .filter(Boolean);
+}
+
+function addSkillToDeterministicBucket(resume, skill) {
+  if (isEmptyCanonicalValue(skill)) return;
+  const target = isSoftSkill(skill) && !isClearlyTechnicalSkill(skill)
+    ? resume.soft_skills
+    : resume.technical_skills.other;
+  addUnique(target, skill);
+}
+
+function addUnique(arr, value) {
+  const normalized = normalizeTextValue(value);
+  if (!normalized) return;
+  const key = normalized.toLowerCase();
+  if (!arr.some((item) => normalizeTextValue(item)?.toLowerCase() === key)) {
+    arr.push(normalized);
+  }
+}
+
+function isSoftSkill(value) {
+  const text = String(value || "").toLowerCase();
+  return /\b(communication|communicator|interpersonal|presentation|negotiation|leadership|team|collaboration|customer|client relationship|organizational|organisation|time management|detail[- ]oriented|attention to detail|problem[- ]solving|analytical|analytic|decision[- ]making|adaptability|flexibility|mentoring|training|spoken|written|english|mandarin|people manager|tenacity|results oriented)\b/.test(text);
+}
+
+function isClearlyTechnicalSkill(value) {
+  const text = String(value || "").toLowerCase();
+  return /\b(javascript|typescript|python|java|php|c\+\+|c#|sql|mysql|postgres|mongodb|react|angular|vue|node|express|laravel|spring|django|flask|aws|azure|gcp|docker|kubernetes|jenkins|jira|git|linux|unix|windows|html|css|api|rest|graphql|sap|autocad|ptc|creo|solidworks|matlab|oracle|server|network|tcp\/ip|devops|agile|scrum|sdlc|database|software|hardware|testing|automation|scripting|excel|powerpoint|ms office)\b/.test(text);
 }
 
 function canonicalizeValue(value, path) {

@@ -4,6 +4,9 @@
  *
  * Usage:
  *   node tests/validateExtraction.js --dir <resumeFolder> [options]
+ *
+ * Options include:
+ *   --sample, -s  Randomly validate N files
  */
 
 import fs from "fs";

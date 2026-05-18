@@ -1,4 +1,5 @@
 import fs from "fs";
+import os from "os";
 import path from "path";
 import mammoth from "mammoth";//docx parser
 import pdfParse from "pdf-parse";
@@ -6,8 +7,11 @@ import { parse as parseHTML } from "node-html-parser";
 import WordExtractor from "word-extractor"; //doc parser for older .doc files
 import Tesseract from "tesseract.js"; // OCR for images
 import { Readable } from "stream";
+import { execFile } from "child_process";
+import { promisify } from "util";
 
 const MIN_USABLE_TEXT_LENGTH = 80; // Minimum length of text to consider it a successful extraction, otherwise fallback to vision for images and SVGs.
+const execFileAsync = promisify(execFile);
 
 export async function extractTextFromFile(filePath, mimeType, originalName) {
   const ext = path.extname(originalName).toLowerCase();
@@ -99,12 +103,13 @@ export async function extractTextFromFile(filePath, mimeType, originalName) {
 
     // DOC (older Word)
     if (ext === ".doc" || mimeType === "application/msword") {
-      const text = await extractDocText(filePath);
+      const { text, sourceType, warning } = await extractDocText(filePath);
+      if (warning) warnings.push(warning);
       return {
         text,
         isPdf: false,
         isImage: false,
-        sourceType: "doc_text",
+        sourceType,
         warnings,
       };
     }
@@ -197,15 +202,152 @@ function cleanExtractedText(text) {
 }
 
 async function extractDocText(filePath) {
+  const errors = [];
+
   try {
     const extractor = new WordExtractor();
     const doc = await extractor.extract(filePath);
     const text = cleanExtractedText(doc.getBody());
-    if (!text) throw new Error("word-extractor returned empty text");
-    return text;
+    if (text.length >= MIN_USABLE_TEXT_LENGTH) {
+      return { text, sourceType: "doc_text" };
+    }
+    errors.push("word-extractor returned empty text");
   } catch (err) {
-    throw new Error(`Legacy .doc extraction failed: ${err.message}`);
+    errors.push(err.message);
   }
+
+  try {
+    const images = extractEmbeddedImages(fs.readFileSync(filePath));
+    const textParts = [];
+    for (const image of images) {
+      const imageText = await extractImageText(filePath, image);
+      if (imageText.length >= MIN_USABLE_TEXT_LENGTH) textParts.push(imageText);
+    }
+    const text = cleanExtractedText(textParts.join("\n\n"));
+    if (text.length >= MIN_USABLE_TEXT_LENGTH) {
+      return {
+        text,
+        sourceType: "doc_embedded_image_ocr",
+        warning: `word-extractor failed; OCRed ${textParts.length} embedded image(s) from legacy .doc (${errors.join("; ")}).`,
+      };
+    }
+    if (images.length > 0) errors.push(`embedded image OCR returned empty text from ${images.length} image(s)`);
+  } catch (err) {
+    errors.push(`embedded image OCR failed: ${err.message}`);
+  }
+
+  try {
+    const text = await extractDocTextWithWordAutomation(filePath);
+    if (text.length >= MIN_USABLE_TEXT_LENGTH) {
+      return {
+        text,
+        sourceType: "doc_word_automation_text",
+        warning: `word-extractor failed; used Microsoft Word conversion fallback (${errors.join("; ")}).`,
+      };
+    }
+    errors.push("Microsoft Word conversion returned empty text");
+  } catch (err) {
+    errors.push(`Microsoft Word conversion failed: ${err.message}`);
+  }
+
+  throw new Error(`Legacy .doc extraction failed: ${errors.join("; ")}`);
+}
+
+function extractEmbeddedImages(buffer) {
+  return [
+    ...extractEmbeddedPngs(buffer),
+    ...extractEmbeddedJpegs(buffer),
+  ].filter((image) => image.length > 10 * 1024);
+}
+
+function extractEmbeddedPngs(buffer) {
+  const images = [];
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const iend = Buffer.from("IEND");
+  let offset = 0;
+
+  while ((offset = buffer.indexOf(signature, offset)) >= 0) {
+    const end = buffer.indexOf(iend, offset);
+    if (end < 0) break;
+    images.push(buffer.subarray(offset, end + 8));
+    offset = end + 8;
+  }
+
+  return images;
+}
+
+function extractEmbeddedJpegs(buffer) {
+  const images = [];
+  const signature = Buffer.from([0xff, 0xd8, 0xff]);
+  let offset = 0;
+
+  while ((offset = buffer.indexOf(signature, offset)) >= 0) {
+    let end = offset + 2;
+    while ((end = buffer.indexOf(Buffer.from([0xff, 0xd9]), end)) >= 0) {
+      images.push(buffer.subarray(offset, end + 2));
+      offset = end + 2;
+      break;
+    }
+    if (end < 0) break;
+  }
+
+  return images;
+}
+
+async function extractDocTextWithWordAutomation(filePath) {
+  if (process.platform !== "win32") {
+    throw new Error("Microsoft Word automation is only available on Windows");
+  }
+
+  const resolvedInput = path.resolve(filePath);
+  const outputDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "resume-doc-"));
+  const outputPath = path.join(outputDir, `${path.basename(filePath, path.extname(filePath))}.txt`);
+
+  const script = `
+$ErrorActionPreference = "Stop"
+$word = $null
+try {
+  $word = New-Object -ComObject Word.Application
+  $word.Visible = $false
+  $word.DisplayAlerts = 0
+  $doc = $word.Documents.Open(${toPowerShellString(resolvedInput)}, $false, $true)
+  $doc.SaveAs2(${toPowerShellString(outputPath)}, 7)
+  $doc.Close($false)
+} finally {
+  if ($word -ne $null) {
+    $word.Quit()
+    [System.Runtime.InteropServices.Marshal]::ReleaseComObject($word) | Out-Null
+  }
+}
+`;
+
+  try {
+    await execFileAsync("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      script,
+    ], { timeout: 45000, windowsHide: true });
+
+    const raw = await fs.promises.readFile(outputPath);
+    return cleanExtractedText(decodeTextBuffer(raw));
+  } finally {
+    await fs.promises.rm(outputDir, { recursive: true, force: true });
+  }
+}
+
+function toPowerShellString(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function decodeTextBuffer(buffer) {
+  if (buffer.length >= 2) {
+    if (buffer[0] === 0xff && buffer[1] === 0xfe) return buffer.toString("utf16le");
+    if (buffer[0] === 0xfe && buffer[1] === 0xff) return buffer.swap16().toString("utf16le");
+  }
+  return buffer.toString("utf8");
 }
 
 async function extractImageText(filePath, buffer) {

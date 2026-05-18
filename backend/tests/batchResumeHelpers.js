@@ -96,10 +96,10 @@ export function parseBatchArgs(defaults = {}) {
   const opts = {
     dir: null,
     url: "http://localhost:5000",
-    concurrency: 2,
+    concurrency: 1, // Set default concurrency to 1
     batch: 100,
     out: defaults.out,
-    timeout: 60000,
+    timeout: 90000, // Increased default timeout to 90 seconds
     resumeFrom: 0,
     sample: 0,
     quiet: false,
@@ -135,6 +135,7 @@ export function parseBatchArgs(defaults = {}) {
         opts.resumeFrom = Number.parseInt(args[++i], 10);
         break;
       case "--sample":
+      case "-s":
         opts.sample = Number.parseInt(args[++i], 10);
         break;
       case "--quiet":

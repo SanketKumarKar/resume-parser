@@ -6,7 +6,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import { extractTextFromFile } from "./fileParser.js";
-import { extractResumeData } from "./geminiService.js";
+import { extractResumeData } from "./aiService.js";
 import { extractLocalData } from "./localParser.js";
 import { canonicalizeResumeData } from "./resumeCanonicalizer.js";
 import { generateResumePDF } from "./resumeDownloadService.js";
@@ -96,7 +96,7 @@ app.post("/api/extract", upload.single("resume"), async (req, res) => {
       return res.status(422).json({ error: "Could not extract text or image from file." });
     }
 
-    // Step 2: Send to Gemini (with Local Fallback)
+    // Step 2: Send to AI service (with Local Fallback)
     let resumeData;
     let usedFallback = false;
 
@@ -111,14 +111,14 @@ app.post("/api/extract", upload.single("resume"), async (req, res) => {
         originalname
       );
     } catch (apiError) {
-      console.warn("⚠️ Gemini API failed, falling back to local parsing:", apiError.message);
+      console.warn("⚠️ AI extraction failed, falling back to local parsing:", apiError.message);
       
       // Local fallback only works if we have text
       if (text) {
         resumeData = canonicalizeResumeData(extractLocalData(text));
         usedFallback = true;
       } else {
-        // If it was a pure image/PDF and Gemini failed, we might have no text
+        // If it was a pure image/PDF and AI extraction failed, we might have no text
         throw new Error(`API failed and no local text available for fallback: ${apiError.message}`);
       }
     }
