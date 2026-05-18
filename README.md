@@ -70,7 +70,7 @@ resume-extractor/
 ├── backend/
 │   ├── server.js          # Express API server
 │   ├── fileParser.js      # Multi-format file text extraction
-│   ├── geminiService.js   # Gemini API integration (text + vision)
+│   ├── aiService.js       # AI extraction service (Ollama active, Gemini API option in comments)
 │   ├── .env               # API key config (git-ignored)
 │   ├── .env.example       # Template for environment variables
 │   └── package.json
