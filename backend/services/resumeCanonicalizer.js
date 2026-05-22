@@ -141,6 +141,13 @@ const CHRONOLOGICAL_ARRAY_PATHS = new Set([
   "volunteer_experience",
 ]);
 
+/**
+ * Canonicalizes unstructured or partially structured resume data into the strict JSON schema
+ * expected by the application. Enforces types, default values, and structure.
+ *
+ * @param {Object} input - Raw JSON data from AI or local parser
+ * @returns {Object} Canonicalized resume data adhering to RESUME_SCHEMA
+ */
 export function canonicalizeResumeData(input = {}) {
   const source = isPlainObject(input) ? input : {};
   const result = {};
@@ -158,8 +165,9 @@ export function canonicalizeResumeData(input = {}) {
   }
 
   normalizeSkillBuckets(result);
+  postValidate(result);
 
-  return sortObjectKeys(result);
+  return result;
 }
 
 export function normalizeTextValue(value) {
@@ -218,7 +226,7 @@ function canonicalizeObjectWithDefaults(value, defaults, path) {
     result[slugifySectionKey(key)] = canonicalizeValue(extraValue, `${path}.${key}`);
   }
 
-  return sortObjectKeys(result);
+  return result;
 }
 
 function canonicalizeArray(value, path) {
@@ -280,7 +288,7 @@ function canonicalizeAdditionalSections(value) {
       result[normalizedKey] = canonicalValue;
     }
   }
-  return sortObjectKeys(result);
+  return result;
 }
 
 function normalizeSkillBuckets(resume) {
@@ -364,7 +372,7 @@ function canonicalizeValue(value, path) {
       const canonicalChild = canonicalizeValue(childValue, `${path}.${normalizedKey}`);
       if (!isEmptyCanonicalValue(canonicalChild)) result[normalizedKey] = canonicalChild;
     }
-    return sortObjectKeys(result);
+    return result;
   }
   return normalizeTextValue(value);
 }
@@ -452,16 +460,64 @@ function isEmptyCanonicalValue(value) {
   return false;
 }
 
-function sortObjectKeys(value) {
-  if (Array.isArray(value)) return value.map(sortObjectKeys);
-  if (!isPlainObject(value)) return value;
-  const result = {};
-  for (const key of Object.keys(value).sort((a, b) => a.localeCompare(b))) {
-    result[key] = sortObjectKeys(value[key]);
-  }
-  return result;
-}
-
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+// ---------------------------------------------------------------------------
+// Post-processing validation — catch common multi-column parsing artifacts
+// ---------------------------------------------------------------------------
+
+function postValidate(resume) {
+  cleanPersonalInfoArtifacts(resume.personal_info);
+  deduplicateWorkResponsibilities(resume.work_experience);
+}
+
+/**
+ * Clean stray leading digits, isolated characters, and layout artifacts from
+ * personal_info fields like address, city, state, country.
+ */
+function cleanPersonalInfoArtifacts(info) {
+  if (!isPlainObject(info)) return;
+
+  const fieldsToClean = ["address", "city", "state", "country", "zip_code", "full_name"];
+  for (const field of fieldsToClean) {
+    if (typeof info[field] !== "string") continue;
+    // Remove stray leading single digits/characters that are layout artifacts (e.g. "9 Chennai" → "Chennai")
+    info[field] = info[field]
+      .replace(/^\d\s+/, "")  // Leading single digit + space
+      .replace(/^[^a-zA-Z0-9]+/, "") // Leading non-alphanumeric junk
+      .trim();
+    if (!info[field]) info[field] = null;
+  }
+}
+
+/**
+ * If the same responsibility/achievement bullet appears in multiple work entries,
+ * keep it only in the first (most recent) entry where it appears.
+ */
+function deduplicateWorkResponsibilities(workExperience) {
+  if (!Array.isArray(workExperience) || workExperience.length < 2) return;
+
+  const seenResponsibilities = new Set();
+  const seenAchievements = new Set();
+
+  for (const job of workExperience) {
+    if (Array.isArray(job.responsibilities)) {
+      job.responsibilities = job.responsibilities.filter((r) => {
+        const key = normalizeTextValue(r)?.toLowerCase();
+        if (!key || seenResponsibilities.has(key)) return false;
+        seenResponsibilities.add(key);
+        return true;
+      });
+    }
+    if (Array.isArray(job.achievements)) {
+      job.achievements = job.achievements.filter((a) => {
+        const key = normalizeTextValue(a)?.toLowerCase();
+        if (!key || seenAchievements.has(key)) return false;
+        seenAchievements.add(key);
+        return true;
+      });
+    }
+  }
 }

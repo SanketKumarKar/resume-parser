@@ -136,7 +136,7 @@ export default function LoadingState() {
       </div>
 
       <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
-        Powered by Gemini 3 Flash
+        Powered by Gemini 2.5 Flash
       </div>
     </div>
   );

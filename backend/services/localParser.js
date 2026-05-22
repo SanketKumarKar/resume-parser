@@ -2,6 +2,9 @@
  * A basic local resume parser that uses regular expressions and keyword matching
  * to extract information from raw text. This serves as a fallback when the
  * AI-based extraction fails.
+ *
+ * @param {string} text - Raw text extracted from the resume
+ * @returns {Object} JSON structured resume data (matching AI schema)
  */
 
 export function extractLocalData(text) {

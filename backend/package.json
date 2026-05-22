@@ -10,6 +10,8 @@
     "test:score": "node tests/scoreResume.js"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.0",
+    "adm-zip": "^0.5.17",
     "cors": "^2.8.5",
     "docx": "^8.5.0",
     "dotenv": "^16.4.5",
@@ -18,10 +20,12 @@
     "multer": "^1.4.5-lts.1",
     "node-html-parser": "^6.1.13",
     "pdf-parse": "^1.1.1",
+    "pdfjs-dist": "^5.7.284",
     "pdfkit": "^0.13.0",
     "tesseract.js": "^7.0.0",
     "unzipper": "^0.12.3",
-    "word-extractor": "^1.0.4"
+    "word-extractor": "^1.0.4",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.4"

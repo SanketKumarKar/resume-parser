@@ -10,6 +10,10 @@ frontend/dist/
 # Temp uploads
 backend/tmp/
 /test-resumes*
+/resumes/
+resumes/
+backend/tests/
+tests/
 
 # Editor / OS files
 .DS_Store

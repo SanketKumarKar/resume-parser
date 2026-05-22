@@ -1,6 +1,6 @@
 # 📄 ResumeAI — Intelligent Resume Extractor
 
-A full-stack application that extracts structured JSON data from resumes in **any format** using **Google Gemini AI** (gemini-3-flash-preview) — including image-based resumes.
+A full-stack application that extracts structured JSON data from resumes in **any format** using **Google Gemini AI** (gemini-2.5-flash) — including image-based resumes.
 
 ---
 
@@ -219,7 +219,7 @@ const resp = await axios.post('/api/download', { resumeData, filename: 'me', for
 | ------------------- | ------------------------------ |
 | Frontend            | React 18, Vite, react-dropzone |
 | Backend             | Node.js, Express               |
-| AI Model            | Google Gemini 3 Flash Preview  |
+| AI Model            | Google Gemini 2.5 Flash        |
 | PDF / Image Parsing | Gemini inline vision (base64)  |
 | DOCX/DOC            | mammoth                        |
 | HTML                | node-html-parser               |

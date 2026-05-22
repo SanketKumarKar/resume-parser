@@ -232,7 +232,7 @@ CREATE TABLE resume_references (
 
 -- ============================================================================
 -- 12. GENERIC SECTIONS  — The "handle ANY situation" table
---     If Gemini extracts a section we never planned for (e.g. "Military Service",
+--     If AI extraction returns a section we never planned for (e.g. "Military Service",
 --     "Patents", "Speaking Engagements"), it gets stored here as a JSONB blob
 --     keyed by section name. No schema migration needed.
 -- ============================================================================
