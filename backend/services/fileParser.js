@@ -155,10 +155,14 @@ export async function extractTextFromFile(filePath, mimeType, originalName) {
         ? `${headersFooters}\n\n${bodyText}` 
         : bodyText;
 
+      const docxImages = extractDocxImages(buffer);
+
       return {
         text: combinedText,
         isPdf: false,
         isImage: false,
+        buffer,
+        images: docxImages,
         sourceType: "docx_text",
         warnings,
       };
@@ -166,12 +170,14 @@ export async function extractTextFromFile(filePath, mimeType, originalName) {
 
     // DOC (older Word)
     if (ext === ".doc" || mimeType === "application/msword") {
-      const { text, sourceType, warning } = await extractDocText(filePath);
+      const { text, sourceType, warning, images: docImages } = await extractDocText(filePath);
       if (warning) warnings.push(warning);
       return {
         text,
         isPdf: false,
         isImage: false,
+        buffer,
+        images: docImages || [],
         sourceType,
         warnings,
       };
@@ -527,6 +533,14 @@ function extractDocxHeadersFooters(buffer) {
 
 async function extractDocText(filePath) {
   const errors = [];
+  let extractedImagesBase64 = [];
+
+  try {
+    const images = extractEmbeddedImages(fs.readFileSync(filePath));
+    extractedImagesBase64 = images.map(img => img.toString("base64"));
+  } catch (err) {
+    errors.push(`Failed to extract embedded images: ${err.message}`);
+  }
 
   try {
     const extractor = new WordExtractor();
@@ -537,7 +551,7 @@ async function extractDocText(filePath) {
       doc.getFooters()
     ].filter(Boolean).join("\n\n"));
     if (text.length >= MIN_USABLE_TEXT_LENGTH) {
-      return { text, sourceType: "doc_text" };
+      return { text, sourceType: "doc_text", images: extractedImagesBase64 };
     }
     errors.push("word-extractor returned empty text");
   } catch (err) {
@@ -557,6 +571,7 @@ async function extractDocText(filePath) {
         text,
         sourceType: "doc_embedded_image_ocr",
         warning: `word-extractor failed; OCRed ${textParts.length} embedded image(s) from legacy .doc (${errors.join("; ")}).`,
+        images: extractedImagesBase64
       };
     }
     if (images.length > 0) errors.push(`embedded image OCR returned empty text from ${images.length} image(s)`);
@@ -571,6 +586,7 @@ async function extractDocText(filePath) {
         text,
         sourceType: "doc_word_automation_text",
         warning: `word-extractor failed; used Microsoft Word conversion fallback (${errors.join("; ")}).`,
+        images: extractedImagesBase64
       };
     }
     errors.push("Microsoft Word conversion returned empty text");
@@ -579,6 +595,25 @@ async function extractDocText(filePath) {
   }
 
   throw new Error(`Legacy .doc extraction failed: ${errors.join("; ")}`);
+}
+
+function extractDocxImages(buffer) {
+  try {
+    const zip = new AdmZip(buffer);
+    const zipEntries = zip.getEntries();
+    const images = [];
+
+    for (const entry of zipEntries) {
+      const name = entry.entryName.toLowerCase();
+      if (name.startsWith("word/media/") && (name.endsWith(".jpeg") || name.endsWith(".jpg") || name.endsWith(".png"))) {
+        images.push(entry.getData().toString("base64"));
+      }
+    }
+    return images;
+  } catch (err) {
+    console.warn("Failed to extract images from docx ZIP:", err.message);
+    return [];
+  }
 }
 
 function extractEmbeddedImages(buffer) {

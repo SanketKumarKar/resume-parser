@@ -117,10 +117,13 @@ Ignore isolated single digits, single letters, or stray characters that are clea
 R15 — ADDITIONAL SECTIONS
 Any resume section with a heading that does not map to a standard schema key belongs in additional_sections. Use the exact section heading (lowercased, spaces replaced with underscores) as the key, and copy the content verbatim as a string or array of strings.
 Examples: "patents", "speaking_engagements", "military_service", "conference_talks".
+R16 — VALID RESUME CHECK
+If the provided document is clearly NOT a resume (e.g., it is a random image, a receipt, a completely unrelated document), set the top-level field "is_resume" to false. Otherwise, set it to true.
 
 OUTPUT SCHEMA
 
 {
+  "is_resume": true,
   "personal_info": {
     "full_name": null,
     "email": null,
@@ -306,17 +309,14 @@ export async function extractResumeData(
   filePath,
   originalName,
   pageCount = 0,
-  fileBuffer = null
+  fileBuffer = null,
+  extractedImages = []
 ) {
   let images;
   let promptText = `Extract all information from this resume (${originalName}) and return it as a strict JSON object following the schema provided. Parse every section thoroughly.`;
 
-  // Determine if we should use direct vision (send PDF pages as images to the model)
-  // This is better for: image-based PDFs, scanned documents, or long multi-page resumes
-  const useDirectVision = isPdf && fileBuffer && (
-    pageCount > DIRECT_VISION_PAGE_THRESHOLD || // Long documents (>2 pages)
-    (!extractedText || extractedText.trim().length < MIN_TEXT_FOR_STRUCTURING) // No text extracted
-  );
+  // Always use direct vision for PDF files by converting them to images
+  const useDirectVision = isPdf && fileBuffer;
 
   if (isImage) {
     console.log(`📷 Using direct vision for image: ${originalName}`);
@@ -324,7 +324,7 @@ export async function extractResumeData(
       const imgBuffer = fileBuffer || fs.readFileSync(filePath);
       images = [imgBuffer.toString("base64")];
       promptText += `\n\nThis resume is provided as an image. Read the visual layout and text carefully, paying attention to columns, tables, and section boundaries. Extract only visible resume content.`;
-      if (extractedText && extractedText.trim().length >= MIN_TEXT_FOR_STRUCTURING) {
+      if (extractedText && extractedText.trim().length > 0) {
         promptText += `\n\nSUPPLEMENTARY OCR/TEXT (may contain ordering errors from multi-column layout — prefer the image when conflicts arise):\n${extractedText}`;
       }
     } catch (err) {
@@ -337,18 +337,25 @@ export async function extractResumeData(
       images = await renderPdfPagesToImages(fileBuffer);
       promptText += `\n\nThis resume has ${pageCount} page(s). The page images are provided directly. Read the visual layout carefully, paying attention to columns, tables, and section boundaries. Extract only visible resume content.`;
       // Also include extracted text as supplementary context if available
-      if (extractedText && extractedText.trim().length >= MIN_TEXT_FOR_STRUCTURING) {
+      if (extractedText && extractedText.trim().length > 0) {
         promptText += `\n\nSUPPLEMENTARY OCR/TEXT (may contain ordering errors from multi-column layout — prefer the image when conflicts arise):\n${extractedText}`;
       }
     } catch (err) {
       console.warn(`⚠️ Failed to render PDF pages as images: ${err.message}. Falling back to text extraction.`);
       images = undefined;
     }
+  } else if (extractedImages && extractedImages.length > 0) {
+    console.log(`📷 Sending ${extractedImages.length} extracted embedded images for ${originalName}`);
+    images = extractedImages;
+    promptText += `\n\nThis resume contained embedded images. Read the visual layout carefully and extract only visible resume content from them.`;
+    if (extractedText && extractedText.trim().length > 0) {
+      promptText += `\n\nSUPPLEMENTARY TEXT (may contain ordering errors from multi-column layout — prefer the image when conflicts arise):\n${extractedText}`;
+    }
   }
 
   // Standard text-based path (if not using vision, or vision rendering failed)
   if (!images) {
-    if (extractedText && extractedText.trim().length >= MIN_TEXT_FOR_STRUCTURING) {
+    if (extractedText && extractedText.trim().length > 0) {
       promptText += `\n\nRESUME CONTENT:\n${extractedText}`;
     } else if (isImage) {
       const fileContent = fs.readFileSync(filePath);

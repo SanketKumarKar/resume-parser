@@ -96,7 +96,7 @@ app.post("/api/extract", upload.single("resume"), async (req, res) => {
     const { originalname, mimetype } = req.file;
 
     // Step 1: Extract text from file
-    const { text, isPdf, isImage, sourceType, pageCount, buffer: fileBuffer, warnings = [] } = await extractTextFromFile(
+    const { text, isPdf, isImage, sourceType, pageCount, buffer: fileBuffer, warnings = [], images: extractedImages = [] } = await extractTextFromFile(
       filePath,
       mimetype,
       originalname
@@ -120,7 +120,8 @@ app.post("/api/extract", upload.single("resume"), async (req, res) => {
         filePath,
         originalname,
         pageCount || 0,
-        fileBuffer
+        fileBuffer,
+        extractedImages
       );
     } catch (apiError) {
       console.warn("⚠️ AI extraction failed, falling back to local parsing:", apiError.message);
@@ -133,6 +134,10 @@ app.post("/api/extract", upload.single("resume"), async (req, res) => {
         // If it was a pure image/PDF and AI extraction failed, we might have no text
         throw new Error(`API failed and no local text available for fallback: ${apiError.message}`);
       }
+    }
+
+    if (resumeData && resumeData.is_resume === false) {
+      return res.status(400).json({ error: "No data found upload a valid resume" });
     }
 
     res.json({
@@ -439,7 +444,7 @@ app.post("/api/extract-local-file", async (req, res) => {
     const apiKey = process.env.GEMINI_API_KEY;
 
     // Step 1: Extract text from file
-    const { text, isPdf, isImage, sourceType, pageCount, buffer: fileBuffer, warnings = [] } = await extractTextFromFile(
+    const { text, isPdf, isImage, sourceType, pageCount, buffer: fileBuffer, warnings = [], images: extractedImages = [] } = await extractTextFromFile(
       resolvedPath,
       mimeType,
       originalname
@@ -463,7 +468,8 @@ app.post("/api/extract-local-file", async (req, res) => {
         resolvedPath,
         originalname,
         pageCount || 0,
-        fileBuffer
+        fileBuffer,
+        extractedImages
       );
     } catch (apiError) {
       console.warn("⚠️ AI extraction failed, falling back to local parsing:", apiError.message);
@@ -475,6 +481,10 @@ app.post("/api/extract-local-file", async (req, res) => {
       } else {
         throw new Error(`API failed and no local text available for fallback: ${apiError.message}`);
       }
+    }
+
+    if (resumeData && resumeData.is_resume === false) {
+      return res.status(400).json({ error: "invalid" });
     }
 
     res.json({

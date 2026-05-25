@@ -1,6 +1,7 @@
 const STRING_FIELDS = Symbol("string-fields");
 
 const RESUME_SCHEMA = {
+  is_resume: true,
   personal_info: {
     full_name: null,
     email: null,
@@ -200,6 +201,10 @@ function canonicalizeKnownField(key, value, defaultValue) {
   }
   if (isPlainObject(defaultValue)) {
     return canonicalizeObjectWithDefaults(value, defaultValue, key);
+  }
+  if (typeof defaultValue === "boolean") {
+    if (value === undefined || value === null) return defaultValue;
+    return typeof value === "boolean" ? value : Boolean(value && String(value).toLowerCase() === "true");
   }
   return normalizeTextValue(value);
 }
