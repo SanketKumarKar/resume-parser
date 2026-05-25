@@ -393,10 +393,16 @@ app.post("/api/scan-folder", (req, res) => {
   }
 
   try {
-    const resolvedPath = path.resolve(folderPath);
+    let resolvedPath = path.resolve(folderPath);
 
     if (!fs.existsSync(resolvedPath)) {
-      return res.status(400).json({ error: `The folder path does not exist: ${folderPath}` });
+      // Fallback: Try resolving relative to the project root (parent of __dirname)
+      const alternatePath = path.resolve(__dirname, "..", folderPath);
+      if (fs.existsSync(alternatePath)) {
+        resolvedPath = alternatePath;
+      } else {
+        return res.status(400).json({ error: `The folder path does not exist: ${folderPath}` });
+      }
     }
 
     const stats = fs.statSync(resolvedPath);

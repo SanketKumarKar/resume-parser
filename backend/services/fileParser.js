@@ -98,24 +98,20 @@ export async function extractTextFromFile(filePath, mimeType, originalName) {
     // SVG
     if (ext === ".svg" || mimeType === "image/svg+xml") {
       const text = extractSvgText(buffer.toString("utf8"));
-      if (text.length >= MIN_USABLE_TEXT_LENGTH) {
-        return {
-          text,
-          isPdf: false,
-          isImage: false,
-          buffer,
-          sourceType: "svg_text",
-          warnings,
-        };
+      const hasText = text.length >= MIN_USABLE_TEXT_LENGTH;
+      
+      if (!hasText) {
+        warnings.push("SVG did not contain enough usable text nodes; vision fallback may be required.");
       }
 
-      warnings.push("SVG did not contain enough usable text nodes; vision fallback may be required.");
+      // Always treat as an image so the vision model gets the SVG file,
+      // but include the extracted text as supplementary context if it exists.
       return {
-        text: null,
+        text: hasText ? text : null,
         isPdf: false,
         isImage: true,
         buffer,
-        sourceType: "svg_image_fallback",
+        sourceType: hasText ? "svg_text_with_vision" : "svg_image_fallback",
         warnings,
       };
     }
