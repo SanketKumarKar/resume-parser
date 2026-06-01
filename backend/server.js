@@ -278,84 +278,222 @@ function flattenResumeForExcel(resume, filename) {
   if (!resume) return {};
   
   const info = resume.personal_info || {};
-  
-  // Extract and normalize skills
-  let techSkillsList = [];
-  let softSkillsList = [];
-  
-  if (resume.technical_skills) {
-    const tech = resume.technical_skills;
-    Object.values(tech).forEach(val => {
-      if (Array.isArray(val)) {
-        techSkillsList.push(...val);
-      }
-    });
-  }
-  
-  if (Array.isArray(resume.soft_skills)) {
-    softSkillsList.push(...resume.soft_skills);
-  }
-  
-  // Unique, clean skills
-  const cleanTechSkills = [...new Set(techSkillsList.map(s => String(s).trim()).filter(Boolean))];
-  const cleanSoftSkills = [...new Set(softSkillsList.map(s => String(s).trim()).filter(Boolean))];
+  const tech = resume.technical_skills || {};
 
-  // Summarize education
+  // Helper: join array items, deduplicated and trimmed
+  const joinArr = (arr) => [...new Set((arr || []).map(s => String(s).trim()).filter(Boolean))].join(", ");
+
+  // ── Personal Info ──────────────────────────────────────────────────────────
+
+  const otherSocial = joinArr(info.other_social);
+
+  // ── Technical Skills — individual categories ───────────────────────────────
+
+  const programmingLanguages = joinArr(tech.programming_languages);
+  const frameworksLibraries = joinArr(tech.frameworks_libraries);
+  const databases = joinArr(tech.databases);
+  const cloudPlatforms = joinArr(tech.cloud_platforms);
+  const toolsSoftware = joinArr(tech.tools_software);
+  const operatingSystems = joinArr(tech.operating_systems);
+  const methodologies = joinArr(tech.methodologies);
+  const otherTechSkills = joinArr(tech.other);
+
+  // All technical skills combined (for quick scanning)
+  let allTechSkills = [];
+  Object.values(tech).forEach(val => {
+    if (Array.isArray(val)) allTechSkills.push(...val);
+  });
+  const allTechCombined = joinArr(allTechSkills);
+
+  const softSkills = joinArr(resume.soft_skills);
+
+  // ── Education — detailed ───────────────────────────────────────────────────
+
   const eduList = (resume.education || []).map(edu => {
-    const degree = edu.degree || edu.qualification || "";
-    const field = edu.field_of_study || edu.major || "";
-    const inst = edu.institution || edu.university || edu.school || "";
+    const degree = edu.degree || "";
+    const field = edu.field_of_study || "";
+    const inst = edu.institution || "";
+    const loc = edu.location || "";
     const dates = [edu.start_date, edu.end_date].filter(Boolean).join(" - ");
-    return `${degree}${field ? ' in ' + field : ''} (${inst})${dates ? ' [' + dates + ']' : ''}`;
+    const gpa = edu.gpa || "";
+    const honors = edu.honors || "";
+    const coursework = Array.isArray(edu.relevant_coursework) ? edu.relevant_coursework.join(", ") : "";
+    let entry = `${degree}${field ? ' in ' + field : ''}`;
+    if (inst) entry += ` @ ${inst}`;
+    if (loc) entry += ` (${loc})`;
+    if (dates) entry += ` [${dates}]`;
+    if (gpa) entry += ` GPA: ${gpa}`;
+    if (honors) entry += ` Honors: ${honors}`;
+    if (coursework) entry += ` Coursework: ${coursework}`;
+    return entry;
   }).join(" | ");
 
-  // Summarize work experience
-  const expList = (resume.work_experience || []).map(exp => {
-    const title = exp.job_title || exp.position || "";
-    const comp = exp.company || "";
-    const start = exp.start_date || "";
-    const end = exp.end_date || "";
-    return `${title} at ${comp} (${start} - ${end})`;
-  }).join(" | ");
-
-  // Summarize projects
-  const projList = (resume.projects || []).map(p => {
-    const name = p.name || p.title || "";
-    const tech = Array.isArray(p.technologies_used) ? p.technologies_used.join(", ") : "";
-    return `${name}${tech ? ' [' + tech + ']' : ''}`;
+  // Separate GPA column for quick filtering
+  const eduGPAs = (resume.education || []).map(edu => {
+    const inst = edu.institution || "N/A";
+    return edu.gpa ? `${inst}: ${edu.gpa}` : "";
   }).filter(Boolean).join(" | ");
 
-  // Summarize certifications
+  // ── Work Experience — detailed ─────────────────────────────────────────────
+
+  const expList = (resume.work_experience || []).map(exp => {
+    const title = exp.job_title || "";
+    const comp = exp.company || "";
+    const loc = exp.location || "";
+    const start = exp.start_date || "";
+    const end = exp.end_date || "";
+    const current = exp.is_current ? " (Current)" : "";
+    return `${title} at ${comp}${loc ? ', ' + loc : ''} (${start} - ${end})${current}`;
+  }).join(" | ");
+
+  // Responsibilities — all combined across roles
+  const responsibilities = (resume.work_experience || []).flatMap(exp => {
+    const header = exp.company || exp.job_title || "";
+    return (exp.responsibilities || []).map(r => header ? `[${header}] ${r}` : r);
+  }).join(" | ");
+
+  // Achievements — all combined across roles
+  const achievements = (resume.work_experience || []).flatMap(exp => {
+    const header = exp.company || exp.job_title || "";
+    return (exp.achievements || []).map(a => header ? `[${header}] ${a}` : a);
+  }).join(" | ");
+
+  // ── Projects — detailed ────────────────────────────────────────────────────
+
+  const projList = (resume.projects || []).map(p => {
+    const name = p.name || "";
+    const desc = p.description || "";
+    const techUsed = Array.isArray(p.technologies_used) ? p.technologies_used.join(", ") : "";
+    const dates = [p.start_date, p.end_date].filter(Boolean).join(" - ");
+    const url = p.url || "";
+    const gh = p.github_link || "";
+    let entry = name;
+    if (desc) entry += `: ${desc}`;
+    if (techUsed) entry += ` [${techUsed}]`;
+    if (dates) entry += ` (${dates})`;
+    if (url) entry += ` URL: ${url}`;
+    if (gh) entry += ` GitHub: ${gh}`;
+    return entry;
+  }).filter(Boolean).join(" | ");
+
+  // ── Certifications — detailed ──────────────────────────────────────────────
+
   const certList = (resume.certifications || []).map(c => {
     const name = c.name || "";
-    const issuer = c.issuing_organization || c.issuer || "";
-    return `${name}${issuer ? ' (' + issuer + ')' : ''}`;
-  }).filter(Boolean).join(", ");
+    const issuer = c.issuing_organization || "";
+    const issueDate = c.issue_date || "";
+    const expiry = c.expiry_date || "";
+    const credId = c.credential_id || "";
+    const url = c.url || "";
+    let entry = name;
+    if (issuer) entry += ` (${issuer})`;
+    if (issueDate) entry += ` Issued: ${issueDate}`;
+    if (expiry) entry += ` Expires: ${expiry}`;
+    if (credId) entry += ` ID: ${credId}`;
+    if (url) entry += ` URL: ${url}`;
+    return entry;
+  }).filter(Boolean).join(" | ");
 
-  // Summarize languages
+  // ── Awards — detailed ─────────────────────────────────────────────────────
+
+  const awardsList = (resume.awards_honors || []).map(a => {
+    const title = a.title || "";
+    const issuer = a.issuer || "";
+    const date = a.date || "";
+    const desc = a.description || "";
+    let entry = title;
+    if (issuer) entry += ` (${issuer})`;
+    if (date) entry += ` [${date}]`;
+    if (desc) entry += ` - ${desc}`;
+    return entry;
+  }).filter(Boolean).join(" | ");
+
+  // ── Publications — detailed ────────────────────────────────────────────────
+
+  const pubList = (resume.publications || []).map(p => {
+    const title = p.title || "";
+    const publisher = p.publisher || "";
+    const date = p.date || "";
+    const url = p.url || "";
+    const desc = p.description || "";
+    let entry = title;
+    if (publisher) entry += ` (${publisher})`;
+    if (date) entry += ` [${date}]`;
+    if (url) entry += ` URL: ${url}`;
+    if (desc) entry += ` - ${desc}`;
+    return entry;
+  }).filter(Boolean).join(" | ");
+
+  // ── Languages — detailed ───────────────────────────────────────────────────
+
   const langList = (resume.languages || []).map(l => {
-    const lang = l.language || l.name || "";
+    const lang = l.language || "";
     const prof = l.proficiency || "";
     return `${lang}${prof ? ' (' + prof + ')' : ''}`;
   }).filter(Boolean).join(", ");
 
-  // Summarize awards
-  const awardsList = (resume.awards_honors || []).map(a => {
-    const title = a.title || "";
-    const issuer = a.issuer || "";
-    return `${title}${issuer ? ' (' + issuer + ')' : ''}`;
-  }).filter(Boolean).join(", ");
-  
-  // Summarize references
+  // ── Volunteer Experience ───────────────────────────────────────────────────
+
+  const volunteerList = (resume.volunteer_experience || []).map(v => {
+    const role = v.role || "";
+    const org = v.organization || "";
+    const dates = [v.start_date, v.end_date].filter(Boolean).join(" - ");
+    const desc = v.description || "";
+    let entry = role;
+    if (org) entry += ` at ${org}`;
+    if (dates) entry += ` (${dates})`;
+    if (desc) entry += ` - ${desc}`;
+    return entry;
+  }).filter(Boolean).join(" | ");
+
+  // ── Extracurricular Activities ─────────────────────────────────────────────
+
+  const extracurriculars = joinArr(resume.extracurricular_activities);
+
+  // ── Interests / Hobbies ────────────────────────────────────────────────────
+
+  const interestsHobbies = joinArr(resume.interests_hobbies);
+
+  // ── References — detailed ──────────────────────────────────────────────────
+
   const refList = (resume.references || []).map(r => {
     const name = r.name || "";
     const title = r.title || "";
     const comp = r.company || "";
-    return `${name}${title ? ' - ' + title : ''}${comp ? ' at ' + comp : ''}`;
+    const email = r.email || "";
+    const phone = r.phone || "";
+    const rel = r.relationship || "";
+    let entry = name;
+    if (title) entry += ` - ${title}`;
+    if (comp) entry += ` at ${comp}`;
+    if (email) entry += ` (${email})`;
+    if (phone) entry += ` Ph: ${phone}`;
+    if (rel) entry += ` [${rel}]`;
+    return entry;
   }).filter(Boolean).join(" | ");
+
+  // ── Additional Sections ────────────────────────────────────────────────────
+
+  let additionalSectionsStr = "";
+  if (resume.additional_sections && typeof resume.additional_sections === "object") {
+    const parts = [];
+    for (const [key, value] of Object.entries(resume.additional_sections)) {
+      let valStr;
+      if (Array.isArray(value)) {
+        valStr = value.map(v => typeof v === "object" ? JSON.stringify(v) : String(v)).join("; ");
+      } else if (typeof value === "object" && value !== null) {
+        valStr = JSON.stringify(value);
+      } else {
+        valStr = String(value || "");
+      }
+      if (valStr) parts.push(`${key}: ${valStr}`);
+    }
+    additionalSectionsStr = parts.join(" | ");
+  }
 
   return {
     "Filename": filename || "",
+    // ── Personal Info ──
     "Full Name": resume.full_name || info.full_name || "",
     "Email": resume.email || info.email || "",
     "Phone": resume.phone || info.phone || "",
@@ -366,18 +504,51 @@ function flattenResumeForExcel(resume, filename) {
     "Zip Code": info.zip_code || "",
     "LinkedIn": resume.linkedin_url || info.linkedin || info.linkedin_url || "",
     "GitHub": resume.github_url || info.github || info.github_url || "",
-    "Portfolio/Website": resume.portfolio_url || info.portfolio || resume.website || "",
+    "Portfolio": info.portfolio || "",
+    "Website": info.website || resume.website || "",
+    "Other Social Links": otherSocial,
+    // ── Summary / Objective ──
     "Objective": resume.objective || "",
     "Summary": resume.summary || "",
-    "Degrees/Education": eduList,
+    // ── Education ──
+    "Education": eduList,
+    "Education GPAs": eduGPAs,
+    // ── Work Experience ──
     "Work Experience": expList,
-    "Technical Skills": cleanTechSkills.join(", "),
-    "Soft Skills": cleanSoftSkills.join(", "),
+    "Responsibilities": responsibilities,
+    "Achievements": achievements,
+    // ── Technical Skills (individual categories) ──
+    "All Technical Skills": allTechCombined,
+    "Programming Languages": programmingLanguages,
+    "Frameworks & Libraries": frameworksLibraries,
+    "Databases": databases,
+    "Cloud Platforms": cloudPlatforms,
+    "Tools & Software": toolsSoftware,
+    "Operating Systems": operatingSystems,
+    "Methodologies": methodologies,
+    "Other Technical Skills": otherTechSkills,
+    // ── Soft Skills ──
+    "Soft Skills": softSkills,
+    // ── Projects ──
     "Projects": projList,
+    // ── Certifications ──
     "Certifications": certList,
+    // ── Awards ──
     "Awards/Honors": awardsList,
+    // ── Publications ──
+    "Publications": pubList,
+    // ── Languages ──
     "Languages": langList,
-    "References": refList
+    // ── Volunteer Experience ──
+    "Volunteer Experience": volunteerList,
+    // ── Extracurricular Activities ──
+    "Extracurricular Activities": extracurriculars,
+    // ── Interests / Hobbies ──
+    "Interests/Hobbies": interestsHobbies,
+    // ── References ──
+    "References": refList,
+    // ── Additional Sections ──
+    "Additional Sections": additionalSectionsStr,
   };
 }
 
