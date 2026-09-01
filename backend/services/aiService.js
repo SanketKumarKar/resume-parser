@@ -1,15 +1,18 @@
 import fs from "fs";
 import { canonicalizeResumeData } from "./resumeCanonicalizer.js";
 import { renderPdfPagesToImages } from "./fileParser.js";
+import { extractLocalData } from "./localParser.js";
 
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434/api/generate";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "gemma4";
 
 // Gemini is selected whenever this value is configured; otherwise Ollama is used.
 const GEMINI_API_VERSION = process.env.GEMINI_API_VERSION || "v1beta";
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY?.trim();
 const GEMINI_URL = `https://generativelanguage.googleapis.com/${GEMINI_API_VERSION}/models/${GEMINI_MODEL}:generateContent`;
+
+
 
 // Rate-limiting queue for the Gemini API (10 RPM safe limit for free tier)
 let lastApiCallTime = 0;
@@ -125,13 +128,31 @@ async function callOllama(systemPrompt, promptText, images) {
 }
 
 async function callConfiguredProvider(apiKey, promptText, images, isImage, mimeType) {
+  // Try Gemini first if API key is provided
   if (apiKey) {
     console.log(`✨ Using Gemini API (${GEMINI_MODEL}) for resume extraction.`);
-    return callGemini(SYSTEM_PROMPT, promptText, images, isImage, mimeType, apiKey);
+    try {
+      return await callGemini(SYSTEM_PROMPT, promptText, images, isImage, mimeType, apiKey);
+    } catch (geminiError) {
+      console.warn(`⚠️ Gemini API failed: ${geminiError.message}. Falling back to Ollama...`);
+    }
   }
 
+  // Try Ollama as second option
   console.log(`🦙 Using local Ollama instance (${OLLAMA_MODEL}) for resume extraction.`);
-  return callOllama(SYSTEM_PROMPT, promptText, images);
+  try {
+    return await callOllama(SYSTEM_PROMPT, promptText, images);
+  } catch (ollamaError) {
+    console.warn(`⚠️ Ollama failed: ${ollamaError.message}. Falling back to local parser...`);
+  }
+
+  // Local parser as final fallback
+  console.log(`🔧 Using local regex-based parser as final fallback.`);
+  // For local parser, we need to extract text from the prompt
+  // The promptText contains the resume content after "RESUME CONTENT:"
+  const textMatch = promptText.match(/RESUME CONTENT:\n([\s\S]*)/);
+  const extractedText = textMatch ? textMatch[1].trim() : promptText;
+  return canonicalizeResumeData(extractLocalData(extractedText));
 }
 
 const SYSTEM_PROMPT = `ROLE
@@ -366,9 +387,9 @@ All schema keys present: Every top-level key exists in the output, even if empty
 
 /**
  * Main AI service function that takes extracted text or images from a resume
- * and calls the underlying AI model (Ollama or Gemini) to parse it into structured JSON.
- * 
- * @param {string} apiKey - Optional Gemini API Key
+ * and calls the underlying AI model (Gemini -> Ollama -> Local Parser) to parse it into structured JSON.
+ *
+ * @param {string} apiKey - Optional Gemini API Key (falls back to OLLAMA if undefined, then local parser)
  * @param {string} extractedText - Text extracted from the resume
  * @param {boolean} isPdf - Whether the original file is a PDF
  * @param {boolean} isImage - Whether the original file is an Image
@@ -380,6 +401,7 @@ All schema keys present: Every top-level key exists in the output, even if empty
  * @returns {Promise<Object>} Canonicalized JSON resume data
  */
 export async function extractResumeData(
+  apiKey,
   extractedText,
   isPdf,
   isImage,
@@ -400,7 +422,7 @@ export async function extractResumeData(
     console.log(`📷 Using direct vision for image: ${originalName}`);
     try {
       const imgBuffer = fileBuffer || fs.readFileSync(filePath);
-      images = [imgBuffer.toString("base64")];
+      images = [Buffer.from(imgBuffer).toString("base64")];
       promptText += `\n\nThis resume is provided as an image. Read the visual layout and text carefully, paying attention to columns, tables, and section boundaries. Extract only visible resume content.`;
       if (extractedText && extractedText.trim().length > 0) {
         promptText += `\n\nSUPPLEMENTARY OCR/TEXT (may contain ordering errors from multi-column layout — prefer the image when conflicts arise):\n${extractedText}`;

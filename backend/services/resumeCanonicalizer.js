@@ -522,7 +522,7 @@ function deduplicateWorkResponsibilities(workExperience) {
         if (!key || seenAchievements.has(key)) return false;
         seenAchievements.add(key);
         return true;
-      });
+      }); 
     }
   }
 }

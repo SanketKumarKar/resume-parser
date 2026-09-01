@@ -13,14 +13,14 @@ Resume Extractor is a full-stack application that parses resumes in various form
 │  │                     FileUploader.jsx                         │  │
 │  │  Drag & drop / browse → File selection                       │  │
 │  └───────────────────────┬──────────────────────────────────────┘  │
-│                          │                                          │
-│                          ▼                                          │
+│                          │                                         │
+│                          ▼                                         │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │                    LoadingState.jsx                          │  │
 │  │  Shows progress during extraction                            │  │
 │  └───────────────────────┬──────────────────────────────────────┘  │
-│                          │                                          │
-│                          ▼                                          │
+│                          │                                         │
+│                          ▼                                         │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │                     JsonViewer.jsx                           │  │
 │  │  Displays extracted JSON                                     │  │
@@ -33,41 +33,41 @@ Resume Extractor is a full-stack application that parses resumes in various form
 │                       Backend (Express)                            │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │                      server.js                               │  │
-│  │  - File upload endpoint (/api/extract)                      │  │
-│  │  - Download endpoints (/api/download, /api/export-*)        │  │
-│  │  - Bulk extraction endpoints                                │  │
+│  │  - File upload endpoint (/api/extract)                       │  │
+│  │  - Download endpoints (/api/download, /api/export-*)         │  │
+│  │  - Bulk extraction endpoints                                 │  │
 │  └────────────────────────┬─────────────────────────────────────┘  │
-│                           │                                          │
-│                           ▼                                          │
+│                           │                                        │
+│                           ▼                                        │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │              services/fileParser.js                          │  │
-│  │  - PDF text extraction (pdf-parse)                          │  │
-│  │  - DOCX extraction (mammoth)                                │  │
-│  │  - Image OCR (tesseract.js)                                 │  │
-│  │  - Text file parsing                                        │  │
+│  │  - PDF text extraction (pdf-parse)                           │  │
+│  │  - DOCX extraction (mammoth)                                 │  │
+│  │  - Image OCR (tesseract.js)                                  │  │
+│  │  - Text file parsing                                         │  │
 │  └────────────────────────┬─────────────────────────────────────┘  │
-│                           │                                          │
-│                           ▼                                          │
+│                           │                                        │
+│                           ▼                                        │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │              services/aiService.js                           │  │
-│  │  - AI provider selection                                    │  │
-│  │  - Gemini API integration                                   │  │
-│  │  - Ollama integration                                       │  │
-│  │  - Rate limiting (Gemini)                                   │  │
+│  │  - AI provider selection                                     │  │
+│  │  - Gemini API integration                                    │  │
+│  │  - Ollama integration                                        │  │
+│  │  - Rate limiting (Gemini)                                    │  │
 │  └────────────────────────┬─────────────────────────────────────┘  │
-│                           │                                          │
-│                           ▼                                          │
+│                           │                                        │
+│                           ▼                                        │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │            services/localParser.js                           │  │
-│  │  - Fallback regex parsing                                   │  │
-│  │  - Basic field extraction                                   │  │
+│  │  - Fallback regex parsing                                    │  │
+│  │  - Basic field extraction                                    │  │
 │  └────────────────────────┬─────────────────────────────────────┘  │
-│                           │                                          │
-│                           ▼                                          │
+│                           │                                        │
+│                           ▼                                        │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │          services/resumeCanonicalizer.js                     │  │
-│  │  - Schema validation                                        │  │
-│  │  - Field normalization                                      │  │
+│  │  - Schema validation                                         │  │
+│  │  - Field normalization                                       │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────────────────┘
                               │
