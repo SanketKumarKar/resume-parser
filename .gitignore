@@ -23,5 +23,7 @@ Thumbs.db
 
 # test logs
 backend/tests/*.json
+scratch/
 
-
+graphify-out/
+eng.*

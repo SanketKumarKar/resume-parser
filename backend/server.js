@@ -112,7 +112,6 @@ app.post("/api/extract", upload.single("resume"), async (req, res) => {
 
     try {
       resumeData = await extractResumeData(
-        apiKey,
         text,
         isPdf,
         isImage,

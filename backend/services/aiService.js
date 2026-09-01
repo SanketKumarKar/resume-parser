@@ -4,28 +4,11 @@ import { renderPdfPagesToImages } from "./fileParser.js";
 
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434/api/generate";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "gemma4";
-const MIN_TEXT_FOR_STRUCTURING = 80;
-const DIRECT_VISION_PAGE_THRESHOLD = 2; // PDFs with more than this many pages get sent as images
 
-// To switch from local Ollama/Gemma4 to Gemini API later:
-// 1. Keep GEMINI_API_KEY in backend/.env.
-// 2. In extractResumeData(), comment the "OLLAMA / GEMMA4 ACTIVE BLOCK".
-// 3. Uncomment the "GEMINI API ALTERNATIVE BLOCK".
-//
-// Gemini 3 Flash model code from Google AI docs:
-//   gemini-3-flash-preview
-// Gemini 3 currently uses the v1alpha API in examples, and Google recommends
-// keeping temperature at its Gemini 3 default of 1.0 instead of forcing 0.0.
-// For older stable Gemini 2.5 Flash, use:
-//   GEMINI_API_VERSION=v1beta
-//   GEMINI_MODEL=gemini-2.5-flash
-//
-// Suggested env values for Gemini 3 Flash preview:
-//   GEMINI_API_VERSION=v1alpha
-//   GEMINI_MODEL=gemini-3-flash-preview
-//
+// Gemini is selected whenever this value is configured; otherwise Ollama is used.
 const GEMINI_API_VERSION = process.env.GEMINI_API_VERSION || "v1beta";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY?.trim();
 const GEMINI_URL = `https://generativelanguage.googleapis.com/${GEMINI_API_VERSION}/models/${GEMINI_MODEL}:generateContent`;
 
 // Rate-limiting queue for the Gemini API (10 RPM safe limit for free tier)
@@ -43,8 +26,7 @@ async function throttleApiCall(apiCallFn) {
       await new Promise((resolve) => setTimeout(resolve, waitTime));
     }
     try {
-      const res = await apiCallFn();
-      return res;
+      return await apiCallFn();
     } finally {
       lastApiCallTime = Date.now();
     }
@@ -53,6 +35,103 @@ async function throttleApiCall(apiCallFn) {
   // Do not block subsequent queue requests if this request fails
   apiQueuePromise = resultPromise.catch(() => {});
   return resultPromise;
+}
+
+function getGeminiParts(systemPrompt, promptText, images, isImage, mimeType) {
+  const parts = [{ text: `${systemPrompt}\n\n${promptText}` }];
+
+  if (images) {
+    for (const imageData of images) {
+      parts.push({
+        inlineData: {
+          mimeType: isImage ? (mimeType || "image/png") : "image/png",
+          data: imageData,
+        },
+      });
+    }
+  }
+
+  return parts;
+}
+
+async function callGemini(systemPrompt, promptText, images, isImage, mimeType, apiKey) {
+  const geminiRequestBody = {
+    contents: [{
+      role: "user",
+      parts: getGeminiParts(systemPrompt, promptText, images, isImage, mimeType),
+    }],
+    generationConfig: {
+      responseMimeType: "application/json",
+      temperature: 0.1,
+      topP: 0.95,
+      topK: 40,
+      seed: 42,
+    },
+  };
+
+  const geminiResponse = await throttleApiCall(() =>
+    fetch(`${GEMINI_URL}?key=${apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(geminiRequestBody),
+    })
+  );
+
+  if (!geminiResponse.ok) {
+    const errorText = await geminiResponse.text();
+    throw new Error(`Gemini API responded with status ${geminiResponse.status}: ${errorText}`);
+  }
+
+  const geminiResult = await geminiResponse.json();
+  const geminiText = geminiResult.candidates?.[0]?.content?.parts
+    ?.map((part) => part.text || "")
+    .join("")
+    .trim();
+
+  return canonicalizeResumeData(parseModelJson(geminiText));
+}
+
+async function callOllama(systemPrompt, promptText, images) {
+  const requestBody = {
+    model: OLLAMA_MODEL,
+    system: systemPrompt,
+    prompt: promptText,
+    stream: false,
+    format: "json",
+    options: {
+      temperature: 0,
+      seed: 42,
+      top_k: 1,
+      top_p: 0.1,
+      repeat_penalty: 1,
+      num_ctx: 8192,
+    },
+  };
+
+  if (images) requestBody.images = images;
+
+  const response = await fetch(OLLAMA_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(requestBody),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Ollama API responded with status: ${response.status}`);
+  }
+
+  const result = await response.json();
+  return canonicalizeResumeData(parseModelJson(result.response));
+}
+
+async function callConfiguredProvider(apiKey, promptText, images, isImage, mimeType) {
+  if (apiKey) {
+    console.log(`✨ Using Gemini API (${GEMINI_MODEL}) for resume extraction.`);
+    return callGemini(SYSTEM_PROMPT, promptText, images, isImage, mimeType, apiKey);
+  }
+
+  console.log(`🦙 Using local Ollama instance (${OLLAMA_MODEL}) for resume extraction.`);
+  return callOllama(SYSTEM_PROMPT, promptText, images);
 }
 
 const SYSTEM_PROMPT = `ROLE
@@ -120,7 +199,7 @@ Examples: "patents", "speaking_engagements", "military_service", "conference_tal
 R16 — VALID RESUME CHECK
 If the provided document is clearly NOT a resume (e.g., it is a random image, a receipt, a completely unrelated document), set the top-level field "is_resume" to false. Otherwise, set it to true.
 
-OUTPUT SCHEMA
+OUTPUT SCHEMA:
 
 {
   "is_resume": true,
@@ -301,7 +380,6 @@ All schema keys present: Every top-level key exists in the output, even if empty
  * @returns {Promise<Object>} Canonicalized JSON resume data
  */
 export async function extractResumeData(
-  apiKey,
   extractedText,
   isPdf,
   isImage,
@@ -366,114 +444,8 @@ export async function extractResumeData(
     }
   }
 
-  /* --- GEMINI API BLOCK COMMENTED OUT PER USER REQUEST ---
-  const effectiveApiKey = apiKey || process.env.GEMINI_API_KEY;
-
-  if (effectiveApiKey) {
-    console.log(`✨ Using Gemini API (${GEMINI_MODEL}) for resume extraction.`);
-    try {
-      const geminiParts = [
-        { text: `${SYSTEM_PROMPT}\n\n${promptText}` },
-      ];
-
-      // Add all page images as inline data (supports multi-page direct vision)
-      if (images) {
-        for (const imageData of images) {
-          geminiParts.push({
-            inlineData: {
-              mimeType: isImage ? (mimeType || "image/png") : "image/png",
-              data: imageData,
-            },
-          });
-        }
-      }
-
-      const geminiRequestBody = {
-        contents: [
-          {
-            role: "user",
-            parts: geminiParts,
-          },
-        ],
-        generationConfig: {
-          responseMimeType: "application/json",
-          temperature: 0.1,
-          topP: 0.95,
-          topK: 40,
-          seed: 42,
-        },
-      };
-
-      const geminiResponse = await throttleApiCall(() =>
-        fetch(`${GEMINI_URL}?key=${effectiveApiKey}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(geminiRequestBody),
-        })
-      );
-
-      if (!geminiResponse.ok) {
-        const errorText = await geminiResponse.text();
-        throw new Error(`Gemini API responded with status ${geminiResponse.status}: ${errorText}`);
-      }
-
-      const geminiResult = await geminiResponse.json();
-      const geminiText = geminiResult.candidates?.[0]?.content?.parts
-        ?.map((part) => part.text || "")
-        .join("")
-        .trim();
-
-      return canonicalizeResumeData(parseModelJson(geminiText));
-    } catch (error) {
-      console.error("Error communicating with Gemini API:", error);
-      throw error;
-    }
-  } else {
-  */
-    // ---------------------------------------------------------------------
-    // OLLAMA / GEMMA4 ACTIVE BLOCK (FALLBACK)
-    // ---------------------------------------------------------------------
-    console.log(`🦙 Using local Ollama instance (${OLLAMA_MODEL}) for resume extraction.`);
-    try {
-      const requestBody = {
-        model: OLLAMA_MODEL,
-        system: SYSTEM_PROMPT,
-        prompt: promptText,
-        stream: false,
-        format: "json",
-        options: {
-          temperature: 0,// Deterministic output
-          seed: 42,// Fixed seed for reproducibility
-          top_k: 1,// Focus on the single most likely output
-          top_p: 0.1,// Limit to the most probable tokens
-          repeat_penalty: 1,// No penalty to allow necessary repetition in structured data
-          num_ctx: 8192,// Large context window to handle long resumes without truncation
-        },
-      };
-
-      if (images) {
-        requestBody.images = images;
-      }
-
-      const response = await fetch(OLLAMA_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        throw new Error(`Ollama API responded with status: ${response.status}`);
-      }
-
-      const result = await response.json();
-      return canonicalizeResumeData(parseModelJson(result.response));
-    } catch (error) {
-      console.error("Error communicating with local Ollama instance:", error);
-      throw error;
-    }
-  // }
+  const effectiveApiKey = String(apiKey || GEMINI_API_KEY || "").trim();
+  return callConfiguredProvider(effectiveApiKey, promptText, images, isImage, mimeType);
 }
 
 function parseModelJson(responseText) {
